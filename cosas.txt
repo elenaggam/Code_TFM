@@ -1,7 +1,8 @@
-iterpol1d
+DONE:
+iterpol1d 
 
-cte pt a pt:
-    no tener <<0
+cte pt a pt no tener <<0
+    NOT DONE:
     forma tonta: min y sumar
     zonas que son 0 pej extremos o en promedio serían cero
 

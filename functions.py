@@ -31,16 +31,22 @@ def background_first_step(s, x, y, E=None):
     """
 
     # Area check
-    if x[0] >= x[1] or y[0] >= y[1] or np.any(np.array(x) < 0) or np.any(np.array(y) < 0):
-        raise ValueError("\nIn background_constant: invalid ROI dimensions\n")
+    x_range = (float(np.round(s.axes_manager[0].axis[0], 2)), float(np.round(s.axes_manager[0].axis[-1], 2)))
+    if x[0] >= x[1] or np.any(np.array(x) < 0) or x[1] > x_range[1] or x[0] < x_range[0]:
+        raise ValueError(f"\nIn background_first_step: invalid ROI dimensions, x not in {x_range}\n")
     
+    y_range = (float(np.round(s.axes_manager[1].axis[0], 2)), float(np.round(s.axes_manager[1].axis[-1], 2)))
+    if y[0] >= y[1] or np.any(np.array(y) < 0) or y[1] > y_range[1] or y[0] < y_range[0]:
+        raise ValueError(f"\nIn background_first_step: invalid ROI dimensions, y not in {y_range}\n")
+
     roi = hs.roi.RectangularROI(left=x[0], right=x[1], top=y[0], bottom=y[1])
     small_s = roi(s)
 
     # Energy range check
     if E is not None:
-        if E[0] >= E[1] or E[0] < small_s.axes_manager[2].axis[0] or E[1] > small_s.axes_manager[2].axis[-1]:
-            raise ValueError("\nIn background_polyfit: invalid energy range\n")
+        E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
+        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
+            raise ValueError(f"\nIn background_first_step: invalid energy range, not in {E_range}\n")
         small_s = small_s.isig[E[0]:E[1]]
 
     # Pixels are averaged to get a single spectrum called background
@@ -197,14 +203,40 @@ def background_removal(s, x, y, E=None, name='interpolation', order=None):
     raise ValueError("\nIn background_subtraction: unknown method name\n")
 
 
+# Correction: Positive intensity values or at least close to zero
+def ic_naive(s):
+    """
+    Correction: Positive intensity values by shifting the spectrum upwards.
+    The minimum intensity value is set to zero.
 
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The corrected EELS spectrum.    
+    """
+    if np.any(s.data < 0):
+        print("\nIn ic_naive: negative intensity values found, applying correction...\n")
+        a = np.min(s.data)
+        if a < 0:
+            s.data -= a    
+
+    return s
 
 
 data_path_base = "C:/Users/lgarc/OneDrive/Escritorio/Universidad/Máster/TFM/Data/"
 data_path = data_path_base + 'Triangle/4-STEM SI.dm4'
 s = hs.load(data_path)[-1]
 
-background_removal(s, (0, 10), (0, 10), E=(0.,3.)).plot()
+new=background_removal(s, (200, 210), (150, 160), E=(-2.,3.))
+new.plot()
+plt.show()
+new=ic_naive(new)
+new.plot()
 plt.show()
 
 
