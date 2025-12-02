@@ -2,11 +2,14 @@ DONE:
 iterpol1d 
 
 cte pt a pt no tener <<0
-    NOT DONE:
     forma tonta: min y sumar
-    zonas que son 0 pej extremos o en promedio serían cero
 
+    zonas que son 0 pej extremos o en promedio serían cero (ic averaged)
+
+NOT DONE:
+    LEER TESIS
     zlp cerca particula baja y se ensancha  criterio
+    ver donde avg tiende a cero?
 
     normalizar fondo: para forma
 

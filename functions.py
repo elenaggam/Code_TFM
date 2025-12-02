@@ -204,7 +204,7 @@ def background_removal(s, x, y, E=None, name='interpolation', order=None):
 
 
 # Correction: Positive intensity values or at least close to zero
-def ic_naive(s):
+def ic_naive(s, E=None):
     """
     Correction: Positive intensity values by shifting the spectrum upwards.
     The minimum intensity value is set to zero.
@@ -213,19 +213,138 @@ def ic_naive(s):
     -----------
     s : hs.signals.EELSSpectrum or hs.signals.Signal1D
         The input (EELS) spectrum.
+    E : tuple (optional)
+        The energy range to consider for the correction in eV.
 
     Returns:
     --------
     hs.signals.EELSSpectrum or hs.signals.Signal1D
         The corrected EELS spectrum.    
     """
-    if np.any(s.data < 0):
-        print("\nIn ic_naive: negative intensity values found, applying correction...\n")
-        a = np.min(s.data)
+    
+    if E is not None:
+        s2 = s.isig[E[0]:E[1]]
+    else:
+        s2 = s
+    if np.any(s2.data < 0):
+        print(f"\nIn ic_naive: {np.sum(s2.data < 0)} negative intensity values found, min={np.min(s2.data)}, applying correction...\n")
+        a = np.min(s2.data)
         if a < 0:
             s.data -= a    
+    # tends to produce overestimation of the background, big shifts
+    return s
+
+def ic_threshold(s, threshold=0, E=None):
+    """
+    Correction: Positive intensity values by setting negative values below a threshold to the threshold value.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    threshold : float
+        The threshold value to set for negative intensities (default is 0).
+        Number of counts.
+        It must be adecuate in order not to lose relevant information of the spectrum, like the plasmon peak.
+    E : tuple (optional)
+        The energy range to consider for the correction in eV.
+
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The corrected EELS spectrum.    
+    """
+    
+    if E is not None:
+        s2 = s.isig[E[0]:E[1]]
+    else:
+        s2 = s 
+    if np.any(s2.data < threshold):
+        print(f"\nIn ic_threshold: {np.sum(s2.data < threshold)} intensity values below a threshold of {threshold} counts found, applying correction...\n")
+        s2.data[s2.data < threshold] = threshold
+
+        if E is not None:
+            s.isig[E[0]:E[1]] = s2
+        else:
+            s = s2
 
     return s
+
+def ic_averaged(s, threshold=0, E=None):
+    """
+    Correction: Positive intensity values by setting negative values below a threshold to the average
+    of these values.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    threshold : float
+        The threshold value to set for negative intensities (default is 0).
+        Number of counts.
+        It must be adecuate in order not to lose relevant information of the spectrum, like the plasmon peak.
+    E : tuple (optional)
+        The energy range to consider for the correction in eV.
+
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The corrected EELS spectrum.
+    """
+
+    if E is not None:
+        s2 = s.isig[E[0]:E[1]]
+    else:
+        s2 = s 
+
+    if np.any(s2.data < threshold):
+        avg = np.mean(s2.data[s2.data < threshold])
+        print(f"\nIn ic_averaged: {np.sum(s2.data < threshold)} intensity values below a threshold of {threshold} counts found, applying correction, to be set as {avg:.3f}... \n")
+        s2.data[s2.data < threshold] = avg
+
+    if E is not None:
+        s.isig[E[0]:E[1]] = s2
+    else:
+        s = s2
+            
+    return s
+
+def intensity_correction(s, threshold=0, E=None, name='threshold'):
+    """
+    Corrects intensity values in EELS spectra using the specified method.
+
+    Parameters:
+    -----------
+    name : str
+        The method to use for intensity correction. Options are:
+        'naive' - shifts the spectrum upwards to set minimum to zero,
+        'threshold' - sets negative values below a threshold to the threshold value,
+        'averaged' - sets negative values below a threshold to their average value.
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    threshold : float
+        The threshold value to set for negative intensities (default is 0).
+        Number of counts.
+        It must be adecuate in order not to lose relevant information of the spectrum, like the plasmon peak.
+    E : tuple (optional)
+        The energy range to consider for the correction in eV.
+    Returns:    
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The corrected EELS spectrum.
+    """
+
+    if name == 'naive':
+        return ic_naive(s, E)
+    
+    if name == 'threshold':
+        return ic_threshold(s, threshold, E)
+
+    if name == 'averaged':
+        return ic_averaged(s, threshold, E)
+    
+    raise ValueError("\nIn intensity_correction: unknown method name\n")
+
 
 
 data_path_base = "C:/Users/lgarc/OneDrive/Escritorio/Universidad/Máster/TFM/Data/"
@@ -233,11 +352,12 @@ data_path = data_path_base + 'Triangle/4-STEM SI.dm4'
 s = hs.load(data_path)[-1]
 
 new=background_removal(s, (200, 210), (150, 160), E=(-2.,3.))
-new.plot()
-plt.show()
-new=ic_naive(new)
-new.plot()
-plt.show()
+
+
+new3=ic_averaged(new, threshold=500,  E=(3., new.axes_manager[2].axis[-1]))
+new3.plot()
+plt.show(block=False)
+
 
 
 input("Press Enter to continue...")
