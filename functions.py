@@ -311,9 +311,9 @@ def best_avg_roi(s, nx, ny, threshold, E=None, x0=0, y0=0, xf=None, yf=None, ste
     -----------
     s : hs.signals.EELSSpectrum or hs.signals.Signal1D
         The input (EELS) spectrum.
-    nx : tuple
+    nx : float
         The range in the x-direction to consider for ROI.
-    ny : tuple
+    ny : float
         The range in the y-direction to consider for ROI.
     threshold : float
         The threshold value to set for negative intensities.
@@ -362,7 +362,7 @@ def best_avg_roi(s, nx, ny, threshold, E=None, x0=0, y0=0, xf=None, yf=None, ste
             yf = s.axes_manager[1].axis[-1]
         delta_step_y = (yf - y0 - ny) / steps_y
 
-    print(f"\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime remaining")
+    print(f"\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime in iteration\ttime remaining")
 
     abs_start_time = time.time()
     perc = 10
@@ -401,25 +401,56 @@ def best_avg_roi(s, nx, ny, threshold, E=None, x0=0, y0=0, xf=None, yf=None, ste
                 x_best = (x_start, x_end)
                 y_best = (y_start, y_end)
 
-        t = time.time() - start_t
-        if (i+1)*100/steps_x >= perc:
+        t = time.time()
+        a = (i+1)*100/steps_x
+        if a >= perc:
             if perc == 100:
-                total_t = time.time() - abs_start_time
-                print(f"{perc}\t\tTotal runtime: {total_t:.2f} s")
                 break
-            remaining = t*(steps_x - i - 1)
+            remaining = (t - start_t)*(steps_x - i - 1)
             if remaining < 60:
-                print(f"{perc}\t\t{remaining:.2f} s")
+                print(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining:.2f} s")
             else:
-                print(f"{perc}\t\t{remaining/60:.2f} min")
-            perc += 10
+                print(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/60:.2f} min")
+            perc = round(a) + 10
 
+    
+    total_t = time.time() - abs_start_time
+    print(f"{100}\t\t{t - start_t:.2f} s\t\t\tTotal runtime: {total_t:.2f} s")
     print("------------")
 
     return best_avg, x_best, y_best
 
 
 # Correction: Positive intensity values or at least close to zero
+def ic_zero(s, E=None):
+    """
+    Correction: Positive intensity values by setting all negative values to zero.
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    E : tuple (optional)
+        The energy range to consider for the correction in eV.
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The corrected EELS spectrum.    
+    """
+
+    if E is not None:
+        E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
+        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
+            raise ValueError(f"\nIn ic_zero: invalid energy range, not in {E_range}\n")
+        s2 = s.isig[E[0]:E[1]]
+    else:
+        s2 = s
+    if np.any(s2.data < 0):
+        print(f"\nIn ic_zero: {np.sum(s2.data < 0)} negative intensity values found, min={np.min(s2.data):.0f}, applying correction...")
+        s.data = 0  
+    
+    print("...correction completed.")
+    return s
+
 def ic_naive(s, E=None):
     """
     Correction: Positive intensity values by shifting the spectrum upwards.
@@ -446,11 +477,11 @@ def ic_naive(s, E=None):
     else:
         s2 = s
     if np.any(s2.data < 0):
-        print(f"\nIn ic_naive: {np.sum(s2.data < 0)} negative intensity values found, min={np.min(s2.data)}, applying correction...\n")
+        print(f"\nIn ic_naive: {np.sum(s2.data < 0)} negative intensity values found, min={np.min(s2.data):.0f}, applying correction...")
         a = np.min(s2.data)
-        if a < 0:
-            s.data -= a    
+        s.data -= a    
     # tends to produce overestimation of the background, big shifts
+    print("...correction completed.")
     return s
 
 def ic_threshold(s, threshold=0, E=None):
@@ -482,14 +513,14 @@ def ic_threshold(s, threshold=0, E=None):
     else:
         s2 = s 
     if np.any(s2.data < threshold):
-        print(f"\nIn ic_threshold: {np.sum(s2.data < threshold)} intensity values below a threshold of {threshold} counts found, applying correction...\n")
+        print(f"\nIn ic_threshold: {np.sum(s2.data < threshold)} intensity values below a threshold of {threshold} counts found, applying correction...")
         s2.data[s2.data < threshold] = threshold
 
         if E is not None:
             s.isig[E[0]:E[1]] = s2
         else:
             s = s2
-
+    print("...correction completed.")
     return s
 
 def ic_averaged(s, threshold=0, E=None):
@@ -514,13 +545,18 @@ def ic_averaged(s, threshold=0, E=None):
         The corrected EELS spectrum.
     """
 
+    print(f"\nIn ic_averaged: calculating average of intensity values below a threshold of {threshold} counts...")
     avg = get_avg_in_window(s, threshold, E)
     if avg is not None:
-        s.data[s.data < threshold] = avg
-
+        print(avg)
+        if avg < 0:
+            s.data += abs(avg)
+        else:
+            s.data[s.data < threshold] = avg
+    print("...correction completed.")
     return s
 
-def intensity_correction(s, threshold=0, E=None, name='threshold'):
+def intensity_correction(s, threshold=0, E=None, name='zero'):
     """
     Corrects intensity values in EELS spectra using the specified method.
 
@@ -530,7 +566,8 @@ def intensity_correction(s, threshold=0, E=None, name='threshold'):
         The method to use for intensity correction. Options are:
         'naive' - shifts the spectrum upwards to set minimum to zero,
         'threshold' - sets negative values below a threshold to the threshold value,
-        'averaged' - sets negative values below a threshold to their average value.
+        'averaged' - sets negative values below a threshold to their average value,
+        'zero' - sets all negative values to zero.
     s : hs.signals.EELSSpectrum or hs.signals.Signal1D
         The input (EELS) spectrum.
     threshold : float
@@ -544,7 +581,9 @@ def intensity_correction(s, threshold=0, E=None, name='threshold'):
     hs.signals.EELSSpectrum or hs.signals.Signal1D
         The corrected EELS spectrum.
     """
-
+    if name == 'zero':
+        return ic_zero(s, E)
+    
     if name == 'naive':
         return ic_naive(s, E)
     
@@ -554,7 +593,9 @@ def intensity_correction(s, threshold=0, E=None, name='threshold'):
     if name == 'averaged':
         return ic_averaged(s, threshold, E)
     
+    
     raise ValueError("\nIn intensity_correction: unknown method name\n")
+    
 
 
 
