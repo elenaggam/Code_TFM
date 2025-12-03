@@ -6,13 +6,11 @@ data_path_base = "C:/Users/lgarc/OneDrive/Escritorio/Universidad/Máster/TFM/Dat
 data_path = data_path_base + 'Triangle/4-STEM SI.dm4'
 s = hs.load(data_path)[-1]
 
-new=F.background_removal(s, (200, 210), (150, 160), E=(-2.,3.))
+E = (3., s.axes_manager[2].axis[-1])
+avg, x, y=F.best_avg_roi(s, nx=10, ny=10, threshold=0, E=E, x0=s.axes_manager[0].axis[-1]/2, steps_x=10, steps_y=10)
+print(f"\nBest average found: {avg} counts in ROI x:{x}, y:{y}\n")
 
+new=F.background_removal(s, x, y, E=E)
+new.plot()
+plt.show()
 
-new3=F.ic_averaged(new, threshold=500,  E=(3., new.axes_manager[2].axis[-1]))
-new3.plot()
-plt.show(block=False)
-
-
-
-input("Press Enter to continue...")

@@ -2,9 +2,91 @@ import numpy as np
 import matplotlib.pyplot as plt
 import hyperspy.api as hs
 from scipy.interpolate import interp1d
-
+import time
 
 # Background substraction for EELS spectra
+def check_roi_E(s, x, y, E=None):
+    """
+    Checks the validity of the input parameters for background removal.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    x : tuple
+        The range in the x-direction to consider for background calculation.
+    y : tuple
+        The range in the y-direction to consider for background calculation.    
+    E : tuple (optional)
+        The energy range to consider for background calculation in eV.
+    Returns:
+    --------
+    x_check : bool
+        True if the x range is valid, False otherwise.
+    y_check : bool
+        True if the y range is valid, False otherwise.
+    E_check : bool
+        True if the energy range is valid, False otherwise.
+
+    """
+
+    # Area check
+    x_check = True
+    x_range = (float(np.round(s.axes_manager[0].axis[0], 2)), float(np.round(s.axes_manager[0].axis[-1], 2)))
+    if x[0] >= x[1] or np.any(np.array(x) < 0) or x[1] > x_range[1] or x[0] < x_range[0]:
+        x_check = False
+
+    y_check = True
+    y_range = (float(np.round(s.axes_manager[1].axis[0], 2)), float(np.round(s.axes_manager[1].axis[-1], 2)))
+    if y[0] >= y[1] or np.any(np.array(y) < 0) or y[1] > y_range[1] or y[0] < y_range[0]:
+        y_check = False
+
+    # Energy range check
+    E_check = True
+    if E is not None:
+        E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
+        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
+            E_check = False
+
+
+    return x_check, y_check, E_check
+
+def get_roi_E(s, x, y, E=None):
+    """
+    Selects the region of interest (ROI) and energy range for background removal.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    x : tuple
+        The range in the x-direction to consider for background calculation.
+    y : tuple
+        The range in the y-direction to consider for background calculation.
+    E : tuple (optional)
+        The energy range to consider for background calculation in eV.
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The selected region of interest and energy range.
+    """
+
+    x_c, y_c, E_c = check_roi_E(s, x, y, E)
+    if not x_c:
+        raise ValueError(f"\nIn get_roi_E: invalid x range\n")
+    if not y_c:
+        raise ValueError(f"\nIn get_roi_E: invalid y range\n")
+    if E is not None and not E_c:
+        raise ValueError(f"\nIn get_roi_E: invalid energy range\n")
+    
+    roi = hs.roi.RectangularROI(left=x[0], right=x[1], top=y[0], bottom=y[1])
+    small_s = roi(s)
+
+    if E is not None:
+        small_s = small_s.isig[E[0]:E[1]]
+
+    return small_s
+
 def background_first_step(s, x, y, E=None):
     """
     First step done for background removal in EELS spectra.
@@ -30,25 +112,7 @@ def background_first_step(s, x, y, E=None):
         The data of interest for background calculation.
     """
 
-    # Area check
-    x_range = (float(np.round(s.axes_manager[0].axis[0], 2)), float(np.round(s.axes_manager[0].axis[-1], 2)))
-    if x[0] >= x[1] or np.any(np.array(x) < 0) or x[1] > x_range[1] or x[0] < x_range[0]:
-        raise ValueError(f"\nIn background_first_step: invalid ROI dimensions, x not in {x_range}\n")
-    
-    y_range = (float(np.round(s.axes_manager[1].axis[0], 2)), float(np.round(s.axes_manager[1].axis[-1], 2)))
-    if y[0] >= y[1] or np.any(np.array(y) < 0) or y[1] > y_range[1] or y[0] < y_range[0]:
-        raise ValueError(f"\nIn background_first_step: invalid ROI dimensions, y not in {y_range}\n")
-
-    roi = hs.roi.RectangularROI(left=x[0], right=x[1], top=y[0], bottom=y[1])
-    small_s = roi(s)
-
-    # Energy range check
-    if E is not None:
-        E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
-        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
-            raise ValueError(f"\nIn background_first_step: invalid energy range, not in {E_range}\n")
-        small_s = small_s.isig[E[0]:E[1]]
-
+    small_s = get_roi_E(s, x, y, E)
     # Pixels are averaged to get a single spectrum called background
     averaged_pixels = np.mean(small_s.data, axis=(0,1))
 
@@ -203,6 +267,158 @@ def background_removal(s, x, y, E=None, name='interpolation', order=None):
     raise ValueError("\nIn background_subtraction: unknown method name\n")
 
 
+# Criteria to select roi for background removal: lowest intensity values
+def get_avg_in_window(s, threshold, E=None):
+    """
+    Helper function to calculate the average of intensity values below a threshold.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    threshold : float
+        The threshold value to set for negative intensities.
+    E : tuple (optional)
+        The energy range to consider for the calculation in eV.
+
+    Returns:
+    --------
+    float
+        The average of intensity values below the threshold.
+    """
+
+    if E is not None:
+        E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
+        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
+            raise ValueError(f"\nIn get_avg_window: invalid energy range, not in {E_range}\n")
+        s2 = s.isig[E[0]:E[1]]
+    else:
+        s2 = s 
+
+    if np.any(s2.data < threshold):
+        avg = np.mean(s2.data[s2.data < threshold])
+        #print(f"\nIn get_avg_window: {np.sum(s2.data < threshold)} intensity values below a threshold of {threshold} counts found, applying correction, to be set as {avg:.3f}... \n")
+        return avg
+    else:
+        return None
+ 
+def best_avg_roi(s, nx, ny, threshold, E=None, x0=0, y0=0, xf=None, yf=None, steps_x=20, steps_y=20, delta_step_x=None, delta_step_y=None):
+    """
+    Helper function to calculate the average of intensity values below a threshold
+    in a specified region of interest (ROI).
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    nx : tuple
+        The range in the x-direction to consider for ROI.
+    ny : tuple
+        The range in the y-direction to consider for ROI.
+    threshold : float
+        The threshold value to set for negative intensities.
+    E : tuple (optional)
+        The energy range to consider for the calculation in eV.
+    x0 : float
+        The starting x-coordinate for ROI search (default is 0).
+    y0 : float
+        The starting y-coordinate for ROI search (default is 0).
+    xf : float (optional)
+        The ending x-coordinate for ROI search (default is None, meaning the maximum x-axis value).
+    yf : float (optional)
+        The ending y-coordinate for ROI search (default is None, meaning the maximum y-axis value).
+    steps_x : int
+        The number of steps in the x-direction for ROI search (default is 100).
+    steps_y : int
+        The number of steps in the y-direction for ROI search (default is 100).
+    delta_step_x : float (optional)
+        The step size for ROI search in the x direction.
+    delta_step_y : float (optional)
+        The step size for ROI search in the y direction.
+    Returns:
+    --------
+    best_avg : float
+        The lowest average of intensity values below the threshold found in the ROI search.
+    x_best : tuple
+        The x-coordinates of the best ROI found.
+    y_best : tuple
+        The y-coordinates of the best ROI found.
+    """
+
+    if nx <= 0 or ny <= 0:
+        raise ValueError(f"\nIn get_avg_roi: invalid ROI size, nx and ny must be positive\n")
+    
+    best_avg = np.max(s.data)  # Initialize with the maximum possible value
+    x_best = None
+    y_best = None
+
+    if delta_step_x is None:
+        if xf is None:
+            xf = s.axes_manager[0].axis[-1]
+        delta_step_x = (xf - x0 - nx) / steps_x
+
+    if delta_step_y is None:
+        if yf is None:
+            yf = s.axes_manager[1].axis[-1]
+        delta_step_y = (yf - y0 - ny) / steps_y
+
+    print(f"\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime remaining")
+
+    abs_start_time = time.time()
+    perc = 10
+    for i in range(steps_x):
+        start_t= time.time()
+
+        # roi dimensions in x
+        x_start = x0 + i * delta_step_x
+        x_end = x_start + nx
+        if x_end > s.axes_manager[0].axis[-1]:
+            print(f"In get_avg_roi: Breaking x loop at step {i}")
+            break
+
+        for j in range(steps_y):
+            # roi dimensions in y
+            y_start = y0 + j * delta_step_y
+            y_end = y_start + ny
+            if y_end > s.axes_manager[1].axis[-1]:
+                print(f"\nIn get_avg_roi: Breaking y loop at step {j}\n")
+                break
+            
+            # Check roi validity
+            x_c, y_c, E_c = check_roi_E(s, (x_start, x_end), (y_start, y_end), E)
+            if E_c is False:
+                raise ValueError(f"\nIn get_avg_roi: invalid energy range\n")
+            if not x_c or not y_c:
+                print("Invalid roi at x: ", (x_start, x_end), " y: ", (y_start, y_end), ', skipping...\n')
+                continue
+
+            roi = hs.roi.RectangularROI(left=x_start, right=x_end, top=y_start, bottom=y_end)
+            small_s = roi(s)
+
+            avg = get_avg_in_window(small_s, threshold, E)
+            if avg is not None and avg < best_avg: # Looking for the lowest average, as counts rise as we hit the nanoparticle
+                best_avg = avg
+                x_best = (x_start, x_end)
+                y_best = (y_start, y_end)
+
+        t = time.time() - start_t
+        if (i+1)*100/steps_x >= perc:
+            if perc == 100:
+                total_t = time.time() - abs_start_time
+                print(f"{perc}\t\tTotal runtime: {total_t:.2f} s")
+                break
+            remaining = t*(steps_x - i - 1)
+            if remaining < 60:
+                print(f"{perc}\t\t{remaining:.2f} s")
+            else:
+                print(f"{perc}\t\t{remaining/60:.2f} min")
+            perc += 10
+
+    print("------------")
+
+    return best_avg, x_best, y_best
+
+
 # Correction: Positive intensity values or at least close to zero
 def ic_naive(s, E=None):
     """
@@ -223,6 +439,9 @@ def ic_naive(s, E=None):
     """
     
     if E is not None:
+        E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
+        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
+            raise ValueError(f"\nIn ic_naive: invalid energy range, not in {E_range}\n")
         s2 = s.isig[E[0]:E[1]]
     else:
         s2 = s
@@ -256,6 +475,9 @@ def ic_threshold(s, threshold=0, E=None):
     """
     
     if E is not None:
+        E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
+        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
+            raise ValueError(f"\nIn ic_threshold: invalid energy range, not in {E_range}\n")
         s2 = s.isig[E[0]:E[1]]
     else:
         s2 = s 
@@ -292,21 +514,10 @@ def ic_averaged(s, threshold=0, E=None):
         The corrected EELS spectrum.
     """
 
-    if E is not None:
-        s2 = s.isig[E[0]:E[1]]
-    else:
-        s2 = s 
+    avg = get_avg_in_window(s, threshold, E)
+    if avg is not None:
+        s.data[s.data < threshold] = avg
 
-    if np.any(s2.data < threshold):
-        avg = np.mean(s2.data[s2.data < threshold])
-        print(f"\nIn ic_averaged: {np.sum(s2.data < threshold)} intensity values below a threshold of {threshold} counts found, applying correction, to be set as {avg:.3f}... \n")
-        s2.data[s2.data < threshold] = avg
-
-    if E is not None:
-        s.isig[E[0]:E[1]] = s2
-    else:
-        s = s2
-            
     return s
 
 def intensity_correction(s, threshold=0, E=None, name='threshold'):

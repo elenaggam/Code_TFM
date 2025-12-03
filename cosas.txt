@@ -5,11 +5,12 @@ cte pt a pt no tener <<0
     forma tonta: min y sumar
 
     zonas que son 0 pej extremos o en promedio serían cero (ic averaged)
-
+    ver donde avg tiende a cero?
+    
 NOT DONE:
     LEER TESIS
     zlp cerca particula baja y se ensancha  criterio
-    ver donde avg tiende a cero?
+    
 
     normalizar fondo: para forma
 
