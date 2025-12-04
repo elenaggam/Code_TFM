@@ -477,8 +477,8 @@ def ic_naive(s, E=None):
     else:
         s2 = s
     if np.any(s2.data < 0):
-        print(f"\nIn ic_naive: {np.sum(s2.data < 0)} negative intensity values found, min={np.min(s2.data):.0f}, applying correction...")
-        a = np.min(s2.data)
+        a = s2.data.min()
+        print(f"\nIn ic_naive: {np.sum(s2.data < 0)} negative intensity values found, min={a:.0f}, applying correction...")
         s.data -= a    
     # tends to produce overestimation of the background, big shifts
     print("...correction completed.")
@@ -556,7 +556,7 @@ def ic_averaged(s, threshold=0, E=None):
     print("...correction completed.")
     return s
 
-def intensity_correction(s, threshold=0, E=None, name='zero'):
+def intensity_correction(s, threshold=0, E=None, name='naive'):
     """
     Corrects intensity values in EELS spectra using the specified method.
 
