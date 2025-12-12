@@ -4,7 +4,8 @@ import hyperspy.api as hs
 from scipy.interpolate import interp1d
 import time
 
-# Background substraction for EELS spectra
+
+# Background calculation for EELS spectra
 def check_roi_E(s, x, y, E=None):
     """
     Checks the validity of the input parameters for background removal.
@@ -114,13 +115,12 @@ def background_first_step(s, x, y, E=None):
 
     small_s = get_roi_E(s, x, y, E)
     # Pixels are averaged to get a single spectrum called background
-    averaged_pixels = np.mean(small_s.data, axis=(0,1))
 
-    return averaged_pixels, small_s
+    return np.mean(small_s.data, axis=(0,1)), small_s
 
 def background_constant(s, x, y, E=None):
     """
-    Subtracts a constant background from EELS spectra by averaging the signal
+    Calculates a constant background from EELS spectra by averaging the signal
     in the specified regions.
 
     Parameters:
@@ -137,21 +137,16 @@ def background_constant(s, x, y, E=None):
     Returns:
     --------
     hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The background-subtracted EELS spectrum.
+        The background calculated from the EELS spectrum.
     """
 
     background, small_s = background_first_step(s, x, y, E)
-    
-    if E is not None:
-        s.isig[E[0]:E[1]] -= background
-    else:
-        s.data -= background
         
-    return s
+    return background
 
 def background_polyfit(s, x, y, E=None, order=1):
     """
-    Subtracts a background from EELS spectra by interpolating the signal
+    Calculates background from EELS spectra by interpolating the signal
     in the specified regions as a polynomial function.
 
     Parameters:
@@ -170,25 +165,19 @@ def background_polyfit(s, x, y, E=None, order=1):
     Returns:
     --------
     hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The background-subtracted EELS spectrum.
+        The background calculated from the EELS spectrum.
     """
 
     averaged_pixels, small_s = background_first_step(s, x, y, E)
     
     # Polynomial fit to the background spectrum
     coeffs = np.polyfit(small_s.axes_manager[2].axis, averaged_pixels, order)
-    background = np.polyval(coeffs, small_s.axes_manager[2].axis)
-    
-    if E is not None:
-        s.isig[E[0]:E[1]] -= background
-    else:
-        s.data -= background
 
-    return s
+    return np.polyval(coeffs, small_s.axes_manager[2].axis)
 
 def background_interpolation(s, x, y, E=None):
     """
-    Subtracts a background from EELS spectra by interpolating the signal.
+    Calculates background from EELS spectra by interpolating the signal.
 
     Parameters:
     -----------
@@ -206,25 +195,19 @@ def background_interpolation(s, x, y, E=None):
     Returns:
     --------
     hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The background-subtracted EELS spectrum.
+        The background
     """
 
     averaged_pixels, small_s = background_first_step(s, x, y, E)
     
     # Interpolation to the background spectrum
     f = interp1d(small_s.axes_manager[2].axis, averaged_pixels, kind='cubic')
-    background = f(small_s.axes_manager[2].axis)
 
-    if E is not None:
-        s.isig[E[0]:E[1]] -= background
-    else:
-        s.data -= background
+    return f(small_s.axes_manager[2].axis)
 
-    return s
-
-def background_removal(s, x, y, E=None, name='interpolation', order=None):
+def get_background(s, x, y, E=None, name='interpolation', order=None):
     """
-    Subtracts background from EELS spectra using the specified method.
+    Calculates background from EELS spectra using the specified method.
 
     Parameters:
     -----------
@@ -247,7 +230,7 @@ def background_removal(s, x, y, E=None, name='interpolation', order=None):
     Returns:
     --------
     hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The background-subtracted EELS spectrum.
+        The background calculated from the EELS spectrum.
     """
 
     if name == 'constant':
@@ -266,9 +249,128 @@ def background_removal(s, x, y, E=None, name='interpolation', order=None):
     
     raise ValueError("\nIn background_subtraction: unknown method name\n")
 
+# Thesis background substraction (intensity will be positive)
+def background_substraction_thesis(s, b):
+    """
+    Background removal method based on normalizing the background spectrum (thesis)
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    b : np.ndarray
+        The background spectrum to be removed.  
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The background-subtracted EELS spectrum.
+
+    """
+
+        # divide each of the reduced spectra by the background, channel by channel, search minimum
+    for i in range(s.data.shape[0]):  # x-axis
+        for j in range(s.data.shape[1]):  # y-axis
+            C_ij = s.data[i,j,:]/b
+
+            # global minimum point and corresponding intensity values
+            # I_min = np.min(C_ij)
+            E_min = np.argmin(C_ij)  # int, index of the global minimum point of C_ij
+            S_min = s.data[i,j,E_min]
+            Ib_min = b[E_min]
+
+            # normalise the background with respect to each one of the spectra
+            # subtract the normalised background from each of the spectra
+            s.data[i,j] -= b*S_min/Ib_min
+
+    # E_min = None
+    # I_min = np.max(s.data)  # initialize with maximum possible value
+    
+    # # divide each of the reduced spectra by the background, channel by channel, search minimum
+    # for i in range(s.data.shape[0]):  # x-axis
+    #     for j in range(s.data.shape[1]):  # y-axis
+    #         I = s.data[i,j]/b
+    #         if I.min() < I_min:
+    #             I_min = I.min()
+    #             E_min = np.argmin(I)  # int, index of the global minimum point of I
+
+    # print(E_min, I_min)
+    # if E_min is None:
+    #     raise ValueError("\nIn back: oops, could not find minimum intensity value\n")
+    
+    # # global minimum point, corresponding values in s (in loop) and b
+    # Ib_min = b[E_min] # float
+    # print(Ib_min)
+
+    # # normalise the background with respect to each one of the spectra
+    # # subtract the normalised background from each of the spectra
+    # for i in range(s.data.shape[0]):  # x-axis
+    #     for j in range(s.data.shape[1]):  # y-axis
+    #         s_min = s.data[i,j, E_min] # float, intensity value at E_min of each spectrum
+    #         s.data[i,j] = s.data[i,j] - b*s_min/Ib_min
+
+    return s
+
+
+
+
+
+# Auxiliary functions
+def normalize_pixelwise(s):
+    """
+    Normalizes each pixel spectrum by its maximum intensity value.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The pixel-wise normalized EELS spectrum.
+    """
+
+    # Create a copy of the original signal to avoid modifying it directly
+    s_normalized = s.copy()
+
+    # Iterate over each pixel in the spatial dimensions
+    for i in range(s_normalized.data.shape[0]):  # Iterate over x-axis
+        for j in range(s_normalized.data.shape[1]):  # Iterate over y-axis
+            pixel_spectrum = s_normalized.data[i, j, :]
+            max_intensity = np.max(pixel_spectrum)
+            if max_intensity != 0:
+                s_normalized.data[i, j, :] = pixel_spectrum / max_intensity
+
+    return s_normalized
+
+def rebin(s, nx=1, ny=1, ne=1):
+    """
+    Rebins the EELS spectrum by the specified factor.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    factor : int
+        The rebinning factor.
+
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The rebinned EELS spectrum.
+    """
+
+    if nx <= 1 and ny <= 1 and ne <= 1:
+        print("\nIn rebinning: all factors must be greater than 1, returning original signal\n")
+        return s
+    
+    s.rebin(scale=(nx, ny, ne))
+
+    return s
+
+
 
 # Criteria to select roi for background removal: lowest intensity values
-def get_avg_in_window(s, threshold, E=None):
+def get_avg_in_window(s, threshold=1e7, E=None):
     """
     Helper function to calculate the average of intensity values below a threshold.
 
@@ -302,7 +404,7 @@ def get_avg_in_window(s, threshold, E=None):
     else:
         return None
  
-def best_avg_roi(s, nx, ny, threshold, E=None, x0=0, y0=0, xf=None, yf=None, steps_x=20, steps_y=20, delta_step_x=None, delta_step_y=None):
+def best_avg_roi(s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=None, yf=None, steps_x=20, steps_y=20, delta_step_x=None, delta_step_y=None):
     """
     Helper function to calculate the average of intensity values below a threshold
     in a specified region of interest (ROI).
@@ -407,6 +509,8 @@ def best_avg_roi(s, nx, ny, threshold, E=None, x0=0, y0=0, xf=None, yf=None, ste
             if perc == 100:
                 break
             remaining = (t - start_t)*(steps_x - i - 1)
+            if remaining > 3600:
+                print(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/3600:.2f} h")
             if remaining < 60:
                 print(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining:.2f} s")
             else:
@@ -477,7 +581,7 @@ def ic_naive(s, E=None):
     else:
         s2 = s
     if np.any(s2.data < 0):
-        a = s2.data.min()
+        a = s2.data.min() # !!! background bien!!!
         print(f"\nIn ic_naive: {np.sum(s2.data < 0)} negative intensity values found, min={a:.0f}, applying correction...")
         s.data -= a    
     # tends to produce overestimation of the background, big shifts
@@ -523,7 +627,7 @@ def ic_threshold(s, threshold=0, E=None):
     print("...correction completed.")
     return s
 
-def ic_averaged(s, threshold=0, E=None):
+def ic_averaged(s, threshold=1e6, E=None):
     """
     Correction: Positive intensity values by setting negative values below a threshold to the average
     of these values.

@@ -1,5 +1,6 @@
 DONE:
 iterpol1d 
+LEER TESIS
 
 cte pt a pt no tener <<0
     forma tonta: min y sumar o llevar a cero
@@ -7,7 +8,6 @@ cte pt a pt no tener <<0
     ver donde avg tiende a cero?
     
 NOT DONE:
-    LEER TESIS
     zlp cerca particula baja y se ensancha  criterio
 
     normalizar fondo: para forma
@@ -17,3 +17,43 @@ pca, nnmf:
     oscilaciones
     
 mascara binaria adf para escoger superficie particula para func dielectrica
+
+05/12
+roi en la particula para ver plasmones
+
+re bin: tamaño pixel-tamaño part
+
+
+
+Intro: interés, aplicación (hipertermia plasmónica, detectores), fluorescencia
+
+Teoría: plasmones, modos, modos en nanopartículas 
+        EELS
+        función dieléctrica egerton, mario
+
+Métodos exp:
+    partículas: síntesis
+    Microscopio (general) y luego describir titán (lma tiene descripción)
+    Monocromador
+    EELS
+
+Análisis de datos:
+    background
+    pca/nnmf
+    función dieléctrica
+
+Resultados:
+    ....
+
+
+
+función dieléctrica
+en load escoger otra componente q no sea -1
+histograma intensidades para ver umbral
+máscara binaria (0 part, 1 fuera)
+mask*espectro
+opencv otsu
+
+funcion hyperspy con thickness
+
+
