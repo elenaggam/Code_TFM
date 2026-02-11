@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import hyperspy.api as hs
 from scipy.interpolate import interp1d
 import time
+import os
 
 
 # Background calculation for EELS spectra
@@ -652,49 +653,84 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-# def dimensionality_reduction(s, method='sklearn_pca', n_components=None, log=False, max_points=40):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=True, save_components=True, plot_variance_ratio=True, plot_components=True):
     '''
-    Applies dimensionality reduction to EELS spectra using the specified method.
+    Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
     Parameters:
     -----------
+    directory : str
+        The directory where the results will be saved.
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.  
     method : str
         The method to use for dimensionality reduction. Options are:
-        'sklearn_pca' - PCA using scikit-learn,
-        'sklearn_nnmf' - Non-negative Matrix Factorization using scikit-learn,
-        'autoencoder' - Autoencoder neural network.
-    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The input (EELS) spectrum.
+        'sklearn_pca' - PCA using scikit-learn implementation,
+        'sklearn_nnmf' - NNMF using scikit-learn implementation.
     n_components : int (optional)
-        The number of components to keep for dimensionality reduction (default is None, meaning all components
-        will be kept).
-    log : bool
-        Whether to use logarithmic scale for explained variance ratio plot (default is False).
+        The number of components to keep (default is None, meaning it will be determined by the elbow method).
     max_points : int
-        The maximum number of points to show in the explained variance ratio plot (default is 40).
+        The maximum number of components to consider for the elbow method (default is 40).  
+    save_summary : bool
+        Whether to save a summary table of the explained variance and explained variance ratio for each component (default is True).
+    save_components : bool
+        Whether to save each component as a separate file (default is True).
+    plot_variance_ratio : bool
+        Whether to plot the explained variance ratio for each component (default is True).
+    plot_components : bool
+        Whether to plot the components (default is True).
+
+    Returns:
+    --------
+    None
     '''
 
     if method not in ['sklearn_pca', 'sklearn_nnmf']:
-        print("\nIn dimensionality_reduction: unknown method name, using 'sklearn_pca' instead\n")
+        print("\nIn components_reduction: unknown method name, using 'sklearn_pca' instead\n")
         method = 'sklearn_pca'
 
     s.decomposition(method) 
 
-    s.learning_results.summary()
-    s.plot_explained_variance_ratio(n=40)
-    a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=40)
-    print(f'Componentes principales: {a}')
-    s.plot_decomposition_results()
-    s.blind_source_separation(4, diff_order=1)
-    _ = s.plot_bss_loadings()
-    _ = s.plot_bss_factors()
-    sm=s.get_decomposition_model(2*a)
-    sm.decomposition(True, algorithm="NMF", output_dimension=2*a,max_iter=50000)
-    #sm.plot_decomposition_results()
-    sm.learning_results.summary()
-    _ = sm.plot_decomposition_loadings()
-    _ = sm.plot_decomposition_factors()
-    sm.T.plot()
-    A = sm.get_decomposition_loadings()
+    # save summary in a text file
+    if save_summary:
+        lr = s.learning_results
+        n_components = lr.loadings.shape[1]
+        explained_variance = lr.explained_variance
+        explained_variance_ratio = lr.explained_variance_ratio
 
-    B =sm.get_decomposition_factors().as_signal1D(1)
+        with open(directory+f"{method}_summary_table.txt", "w") as f:
+            f.write("Component\tExplainedVariance\tExplainedVarianceRatio\n")
+            for i in range(n_components):
+                f.write(f"{i+1}\t{explained_variance[i]}\t{explained_variance_ratio[i]}\n")
+
+    # plot explained variance ratio    
+    if plot_variance_ratio:
+        s.plot_explained_variance_ratio(n=max_points, vline=True)
+        plt.savefig(directory+f"{method}_explained_variance_ratio.png", dpi=300, bbox_inches="tight")
+    
+    a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
+
+    # save each component plot
+    if plot_components:
+        s.plot_decomposition_results(a)
+        plt.savefig(directory+f"{method}_components.png", dpi=300, bbox_inches="tight")
+
+    # save the reduced spectra with the most relevant components
+    sc = s.get_decomposition_results(a)
+    sc.save(directory+f"{method}_{a}_components.hspy")
+
+    # save each component as a separate file
+    if save_components:
+        factors = s.get_decomposition_factors()
+        loadings = s.get_decomposition_loadings()
+    
+        if not os.path.exists(directory+"factors/"):
+            os.makedirs(directory+"factors/")
+        if not os.path.exists(directory+"loadings/"):
+            os.makedirs(directory+"loadings/")
+
+        for i in range(factors.axes_manager.navigation_size):
+            factors.inav[i].save(directory+f"factors/{i+1}.hspy")
+            loadings.inav[i].save(directory+f"loadings/{i+1}.hspy")
+
+    return
