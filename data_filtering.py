@@ -644,10 +644,10 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
     
         s = intensity_correction(s, threshold, E, name_ic)
 
-    s.save(directory+name_bg+'_'+name_ic+'_background_removed.hdf5')
+    s.save(directory+name_bg+'_'+name_ic+'_background_removed.hspy')
     total_time = time.time() - t_init
     print(f"\nBackground removal completed in {total_time/60:.0f} minutes.")
-    print(f"Background removed spectrum saved as {directory+name_bg+'_'+name_ic+'_background_removed.hdf5'}\n")
+    print(f"Background removed spectrum saved as {directory+name_bg+'_'+name_ic+'_background_removed.hspy'}\n")
     return 
 
 
@@ -710,27 +710,24 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     
     a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
 
-    # save each component plot
-    if plot_components:
-        s.plot_decomposition_results(a)
-        plt.savefig(directory+f"{method}_components.png", dpi=300, bbox_inches="tight")
-
-    # save the reduced spectra with the most relevant components
-    sc = s.get_decomposition_results(a)
-    sc.save(directory+f"{method}_{a}_components.hspy")
 
     # save each component as a separate file
     if save_components:
         factors = s.get_decomposition_factors()
         loadings = s.get_decomposition_loadings()
     
-        if not os.path.exists(directory+"factors/"):
-            os.makedirs(directory+"factors/")
-        if not os.path.exists(directory+"loadings/"):
-            os.makedirs(directory+"loadings/")
+        if not os.path.exists(directory+f"{method}_factors/"):
+            os.makedirs(directory+f"{method}_factors/")
+        if not os.path.exists(directory+f"{method}_loadings/"):
+            os.makedirs(directory+f"{method}_loadings/")
 
         for i in range(factors.axes_manager.navigation_size):
-            factors.inav[i].save(directory+f"factors/{i+1}.hspy")
-            loadings.inav[i].save(directory+f"loadings/{i+1}.hspy")
+            factors.inav[i].save(directory+f"{method}_factors/{i+1}.hspy")
+            loadings.inav[i].save(directory+f"{method}_loadings/{i+1}.hspy")
+    
+    # save each component plot
+    if plot_components:
+        s.plot_decomposition_results(n=a)
+        plt.savefig(directory+f"{method}_components.png", dpi=300, bbox_inches="tight")
 
     return
