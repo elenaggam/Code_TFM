@@ -75,11 +75,11 @@ def get_roi_E(s, x, y, E=None):
 
     x_c, y_c, E_c = check_roi_E(s, x, y, E)
     if not x_c:
-        raise ValueError(f"\nIn get_roi_E: invalid x range\n")
+        raise ValueError("\nIn get_roi_E: invalid x range\n")
     if not y_c:
-        raise ValueError(f"\nIn get_roi_E: invalid y range\n")
+        raise ValueError("\nIn get_roi_E: invalid y range\n")
     if E is not None and not E_c:
-        raise ValueError(f"\nIn get_roi_E: invalid energy range\n")
+        raise ValueError("\nIn get_roi_E: invalid energy range\n")
     
     roi = hs.roi.RectangularROI(left=x[0], right=x[1], top=y[0], bottom=y[1])
     small_s = roi(s)
@@ -355,7 +355,7 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
     """
 
     if nx <= 0 or ny <= 0:
-        raise ValueError(f"\nIn get_avg_roi: invalid ROI size, nx and ny must be positive\n")
+        raise ValueError("\nIn get_avg_roi: invalid ROI size, nx and ny must be positive\n")
     
     best_avg = np.max(s.data)  # Initialize with the maximum possible value
     x_best = None
@@ -371,7 +371,8 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
             yf = s.axes_manager[1].axis[-1]
         delta_step_y = (yf - y0 - ny) / steps_y
 
-    print(f"\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime in iteration\ttime remaining")
+    file_time = open(directory+f'{nx}_{ny}_best_avg_roi_time.txt', 'w')
+    file_time.write("\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime in iteration\ttime remaining\n")
 
     abs_start_time = time.time()
     perc = 10
@@ -396,7 +397,7 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
             # Check roi validity
             x_c, y_c, E_c = check_roi_E(s, (x_start, x_end), (y_start, y_end), E)
             if E_c is False:
-                raise ValueError(f"\nIn get_avg_roi: invalid energy range\n")
+                raise ValueError("\nIn get_avg_roi: invalid energy range\n")
             if not x_c or not y_c:
                 print("Invalid roi at x: ", (x_start, x_end), " y: ", (y_start, y_end), ', skipping...\n')
                 continue
@@ -417,20 +418,20 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
                 break
             remaining = (t - start_t)*(steps_x - i - 1)
             if remaining > 3600:
-                print(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/3600:.2f} h")
+                file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/3600:.2f} h\n")
             if remaining < 60:
-                print(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining:.2f} s")
+                file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining:.2f} s\n")
             else:
-                print(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/60:.2f} min")
+                file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/60:.2f} min\n")
             perc = round(a) + 10
 
     
     total_t = time.time() - abs_start_time
-    print(f"{100}\t\t{t - start_t:.2f} s\t\t\tTotal runtime: {total_t:.2f} s")
-    print("------------")
+    file_time.write(f"{100}\t\t{t - start_t:.2f} s\t\t\tTotal runtime: {total_t:.2f} s\n")
+    file_time.close()
 
-    file = open(directory+f'{nx}_{ny}best_avg_roi.txt', 'w')
-    file.write('x_start\tx_end\ny_start\ty_end\tbest_avg\truntime(s)\tx_steps\ty_steps\tdelta_step_x\tdelta_step_y')
+    file = open(directory+f'{nx}_{ny}_best_avg_roi.txt', 'w')
+    file.write('x_start\tx_end\ny_start\ty_end\tbest_avg\truntime(s)\tx_steps\ty_steps\tdelta_step_x\tdelta_step_y\n')
     file.write(f'{x_best[0]}\t{x_best[1]}\n{y_best[0]}\t{y_best[1]}\t{best_avg}\t{total_t:.2f}\t{steps_x}\t{steps_y}\t{delta_step_x:.2f}\t{delta_step_y:.2f}')
     file.close()
 
@@ -465,7 +466,7 @@ def ic_zero(s, E=None):
         print(f"\nIn ic_zero: {np.sum(s2.data < 0)} negative intensity values found, min={np.min(s2.data):.0f}, applying correction...")
         s.data = 0  
     
-    print("...correction completed.")
+    # print("...correction completed.")
     return s
 
 def ic_naive(s, E=None):
@@ -498,7 +499,7 @@ def ic_naive(s, E=None):
         print(f"\nIn ic_naive: {np.sum(s2.data < 0)} negative intensity values found, min={a:.0f}, applying correction...")
         s.data -= a    
     # tends to produce overestimation of the background, big shifts
-    print("...correction completed.")
+    # print("...correction completed.")
     return s
 
 def ic_threshold(s, threshold=0, E=None):
@@ -537,7 +538,7 @@ def ic_threshold(s, threshold=0, E=None):
             s.isig[E[0]:E[1]] = s2
         else:
             s = s2
-    print("...correction completed.")
+    # print("...correction completed.")
     return s
 
 def ic_averaged(s, threshold=1e6, E=None):
@@ -562,15 +563,15 @@ def ic_averaged(s, threshold=1e6, E=None):
         The corrected EELS spectrum.
     """
 
-    print(f"\nIn ic_averaged: calculating average of intensity values below a threshold of {threshold} counts...")
+    # print(f"\nIn ic_averaged: calculating average of intensity values below a threshold of {threshold} counts...")
     avg = get_avg_in_window(s, threshold, E)
     if avg is not None:
-        print(avg)
+        # print(avg)
         if avg < 0:
             s.data += abs(avg)
         else:
             s.data[s.data < threshold] = avg
-    print("...correction completed.")
+    # print("...correction completed.")
     return s
 
 def intensity_correction(s, threshold=0, E=None, name='naive'):
@@ -621,12 +622,12 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
     Complete background removal from EELS spectra by calculating the background and correcting negative intensity values.
     '''
     t_init = time.time()
-    print("\nStarting background removal...\n")
+    # print("\nStarting background removal...\n")
     s.align_zero_loss_peak()
-    print("Zero-loss peak aligned")
+    # print("Zero-loss peak aligned")
 
     x, y = best_avg_roi(directory, s, nx, ny, threshold=threshold, E=E, x0=x0, y0=y0, xf=xf, yf=yf, steps_x=steps_x, steps_y=steps_y, delta_step_x=delta_step_x, delta_step_y=delta_step_y)
-    print(f"Best ROI found at x: {x} y: {y}")
+    # print(f"Best ROI found at x: {x} y: {y}")
 
     if name_bg not in ['constant', 'interpolation', 'thesis']:
         print("\nIn background_removal: unknown method name for background subtraction, using 'interpolation' instead\n")
@@ -646,8 +647,9 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
 
     s.save(directory+name_bg+'_'+name_ic+'_background_removed.hspy')
     total_time = time.time() - t_init
-    print(f"\nBackground removal completed in {total_time/60:.0f} minutes.")
-    print(f"Background removed spectrum saved as {directory+name_bg+'_'+name_ic+'_background_removed.hspy'}\n")
+    file_time = open(directory+f'{name_bg}_{name_ic}_background_removal_time.txt', 'w')
+    file_time.write(f"\nBackground removal completed in {total_time:.2f} seconds ({total_time/60:.2f} minutes).\n")
+    file_time.close()
     return 
 
 
@@ -727,7 +729,7 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     
     # save each component plot
     if plot_components:
-        s.plot_decomposition_results(n=a)
+        s.plot_decomposition_results()
         plt.savefig(directory+f"{method}_components.png", dpi=300, bbox_inches="tight")
 
     return
