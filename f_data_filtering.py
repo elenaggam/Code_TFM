@@ -370,8 +370,11 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
         if yf is None:
             yf = s.axes_manager[1].axis[-1]
         delta_step_y = (yf - y0 - ny) / steps_y
-
-    file_time = open(directory+f'{nx}_{ny}_best_avg_roi_time.txt', 'w')
+        
+    outp = directory + "logs/"
+    if not os.path.exists(outp):
+        os.makedirs(outp)
+    file_time = open(outp+f'{nx}_{ny}_best_avg_roi_time.txt', 'w')
     file_time.write("\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime in iteration\ttime remaining\n")
 
     abs_start_time = time.time()
@@ -425,12 +428,13 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
                 file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/60:.2f} min\n")
             perc = round(a) + 10
 
-    
+
     total_t = time.time() - abs_start_time
     file_time.write(f"{100}\t\t{t - start_t:.2f} s\t\t\tTotal runtime: {total_t:.2f} s\n")
     file_time.close()
+    
 
-    file = open(directory+f'{nx}_{ny}_best_avg_roi.txt', 'w')
+    file = open(outp+f'{nx}_{ny}_best_avg_roi.txt', 'w')
     file.write('x_start\tx_end\ny_start\ty_end\tbest_avg\truntime(s)\tx_steps\ty_steps\tdelta_step_x\tdelta_step_y\n')
     file.write(f'{x_best[0]}\t{x_best[1]}\n{y_best[0]}\t{y_best[1]}\t{best_avg}\t{total_t:.2f}\t{steps_x}\t{steps_y}\t{delta_step_x:.2f}\t{delta_step_y:.2f}')
     file.close()
@@ -647,7 +651,10 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
 
     s.save(directory+name_bg+'_'+name_ic+'_background_removed.hspy')
     total_time = time.time() - t_init
-    file_time = open(directory+f'{name_bg}_{name_ic}_background_removal_time.txt', 'w')
+    outp = directory + "logs/"
+    if not os.path.exists(outp):
+        os.makedirs(outp)
+    file_time = open(outp+f'{name_bg}_{name_ic}_background_removal_time.txt', 'w')
     file_time.write(f"\nBackground removal completed in {total_time:.2f} seconds ({total_time/60:.2f} minutes).\n")
     file_time.close()
     return 
@@ -655,7 +662,7 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=True, save_components=True, plot_variance_ratio=True, plot_components=True):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=True, save_components=True, plot_variance_ratio=True):
     '''
     Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
@@ -679,8 +686,6 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
         Whether to save each component as a separate file (default is True).
     plot_variance_ratio : bool
         Whether to plot the explained variance ratio for each component (default is True).
-    plot_components : bool
-        Whether to plot the components (default is True).
 
     Returns:
     --------
@@ -699,8 +704,10 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
         n_components = lr.loadings.shape[1]
         explained_variance = lr.explained_variance
         explained_variance_ratio = lr.explained_variance_ratio
-
-        with open(directory+f"{method}_summary_table.txt", "w") as f:
+        outp = directory + "logs/"
+        if not os.path.exists(outp):
+            os.makedirs(outp)
+        with open(outp+f"{method}_summary_table.txt", "w") as f:
             f.write("Component\tExplainedVariance\tExplainedVarianceRatio\n")
             for i in range(n_components):
                 f.write(f"{i+1}\t{explained_variance[i]}\t{explained_variance_ratio[i]}\n")
@@ -712,24 +719,28 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     
     a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
 
+    # save new signal with the most relevant components
+    sc = s.get_decomposition_model(a)
+    sc.save(directory+f"{method}_{a}_components.hspy")
 
     # save each component as a separate file
     if save_components:
-        factors = s.get_decomposition_factors()
+        factors = s.get_decomposition_factors().as_signal1D(1)
         loadings = s.get_decomposition_loadings()
-    
-        if not os.path.exists(directory+f"{method}_factors/"):
-            os.makedirs(directory+f"{method}_factors/")
-        if not os.path.exists(directory+f"{method}_loadings/"):
-            os.makedirs(directory+f"{method}_loadings/")
+        dir_components = directory + f"{method}_components/"
 
-        for i in range(factors.axes_manager.navigation_size):
-            factors.inav[i].save(directory+f"{method}_factors/{i+1}.hspy")
-            loadings.inav[i].save(directory+f"{method}_loadings/{i+1}.hspy")
+        if not os.path.exists(dir_components):
+            os.makedirs(dir_components)
+
+        for i in range(a+5): # save a few more components than the elbow point, to be sure not to lose relevant information
+            component = np.einsum('ij,k->ijk', loadings.data[:,i], factors.data[i,:])
+            component_signal = hs.signals.Signal2D(component)
+            component_signal.axes_manager = factors.axes_manager.deepcopy()
+            component_signal.save(dir_components+f"{i+1}.hspy")
+
+            _ = sc.plot_decomposition_loadings([i],title='')
+            plt.savefig(dir_components+f"Componente_{i+1}.png",dpi=600, bbox_inches='tight')
     
-    # save each component plot
-    if plot_components:
-        s.plot_decomposition_results()
-        plt.savefig(directory+f"{method}_components.png", dpi=300, bbox_inches="tight")
+
 
     return
