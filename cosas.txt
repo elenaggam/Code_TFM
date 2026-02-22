@@ -24,6 +24,21 @@ roi en la particula para ver plasmones
 re bin: tamaño pixel-tamaño part
 
 
+función dieléctrica
+en load escoger otra componente q no sea -1 ?
+histograma intensidades para ver umbral
+máscara binaria (0 part, 1 fuera)
+mask*espectro
+opencv otsu
+
+funcion hyperspy con thickness
+
+
+
+
+
+-------------------------------------------------------------------------------------------------------
+MEMORIA:
 
 Intro: interés, aplicación (hipertermia plasmónica, detectores), fluorescencia
 
@@ -44,16 +59,3 @@ Análisis de datos:
 
 Resultados:
     ....
-
-
-
-función dieléctrica
-en load escoger otra componente q no sea -1
-histograma intensidades para ver umbral
-máscara binaria (0 part, 1 fuera)
-mask*espectro
-opencv otsu
-
-funcion hyperspy con thickness
-
-
