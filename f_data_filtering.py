@@ -4,7 +4,7 @@ import hyperspy.api as hs
 from scipy.interpolate import interp1d
 import time
 import os
-import csv as cv
+import cv2 as cv
 
 
 # Background calculation for EELS spectra
@@ -749,98 +749,53 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
 
 
 # binary mask to select the area outside of the nanoparticle
-def save_mask(array_mask, directory, threshold, name=None):
-    '''
-    Saves a binary mask as a text file.
-    Parameters:
-    -----------
-    array_mask : np.ndarray
-        The binary mask to be saved.
-    directory : str
-        The directory where the mask will be saved.
-    threshold : float
-        The threshold value used to generate the mask.
-    name : str (optional)
-        The name of the mask file (default is None, meaning it will be named only based on the threshold).
-    Returns:
-        None
-    '''
+def otsu_mask(s, directory):
+
+    # Sum the energy channels to get a 2D array (flat image)
+    image = s.sum(axis=2).data
+    # Normalize the image to the range [0, 255] and convert to uint8 (8-bit unsigned integer to be compatible with OpenCV functions)
+    image_norm = 255 * (image - np.min(image)) / (np.max(image) - np.min(image))
+    img_8bit = image_norm.astype(np.uint8)
+
+    # Otsu's thresholding to get a binary mask (values of 0 inside and 1 outside)
+    _, mask = cv.threshold(img_8bit, 0, 1, cv.THRESH_BINARY+cv.THRESH_OTSU)
     
-    if name is not None:
-        filename = directory + name + '_' + str(threshold) + '_mask.txt'
-    else:
-        filename = directory + str(threshold) + '_mask.txt'
+    # Save the binary mask as a text file with integer values (0 and 1) with the 2D image's size
+    np.savetxt(directory+"otsu_mask.txt", mask, fmt="%d")
+    histogram, bin_edges = np.histogram(img_8bit.ravel(), bins=256)
+    np.savetxt(directory+"otsu_histogram.txt", np.column_stack((bin_edges[:-1], histogram)), fmt="%d")
+
+    # Plot the images and the histogram
+    plt.figure(figsize=(15, 5))
+
+    # original image
+    plt.subplot(1, 3, 1)
+    plt.imshow(img_8bit, cmap='gray', aspect='equal')
+    plt.title('Original Image')
+    plt.xticks([])
+    plt.yticks([])
+
+    # histogram
+    plt.subplot(1, 3, 2)
+    plt.hist(img_8bit.ravel(), bins=256, color='blue')
+    plt.title('Histogram')
+    plt.xlabel('Intensity')
+    plt.ylabel('Pixel count')
+
+    # masked image
+    plt.subplot(1, 3, 3)
+    plt.imshow(mask, cmap='gray', aspect='equal')
+    plt.title("Otsu's Thresholding")
+    plt.xticks([])
+    plt.yticks([])
+
+    plt.savefig(directory+"otsu_thresholding.png", dpi=300, bbox_inches='tight')
+    plt.close()
     
-    file = open(filename, 'w')
-    for i in range(array_mask.shape[0]):
-        for j in range(array_mask.shape[1]):
-            file.write(f"{array_mask[i,j]}\t")
-        file.write("\n")
-    file.close()
-
-    return
-
-def load_mask(directory, name=None):
-    '''
-    Loads a binary mask from a text file.
-    Parameters:
-    -----------
-    directory : str
-        The directory where the mask is saved.
-    name : str
-        The name of the mask file (default is 'mask').
-    Returns:
-        np.ndarray
-            The loaded binary mask.
-    '''
-    
-    if name is not None:
-        filename = directory + name
-    else:
-        for file in os.listdir(directory): 
-            if file.endswith('_mask.txt'): 
-                filename = directory + file
-                break
-
-    file = open(filename, 'r')
-    lines = file.readlines()
-    array_mask = np.array([[int(value) for value in line.split()] for line in lines])
-    file.close()
-    return array_mask
-
-def otsu_mask(s, png_dir, directory):
-
-    img = cv.imread(png_dir, cv.IMREAD_GRAYSCALE)
-    assert img is not None, f"In otsu_mask: file {png_dir} could not be read"
-
-    # global thresholding
-    ret1,th1 = cv.threshold(img,127,255,cv.THRESH_BINARY)
-    mask1 = cv.inRange(th1)
-    
-
-    # Otsu's thresholding
-    ret2,th2 = cv.threshold(img,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU)
-    mask2 = cv.inRange(th2)
-
-    # Otsu's thresholding after Gaussian filtering
-    blur = cv.GaussianBlur(img,(5,5),0)
-    ret3,th3 = cv.threshold(blur,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU)
-    mask3 = cv.inRange(th3)
-
-    # plot all the images and their histograms
-    images = [img, 0, th1,
-            img, 0, th2,
-            blur, 0, th3]
-    titles = ['Original Noisy Image','Histogram','Global Thresholding (v=127)',
-            'Original Noisy Image','Histogram',"Otsu's Thresholding",
-            'Gaussian filtered Image','Histogram',"Otsu's Thresholding"]
-    for i in range(3):
-        plt.subplot(3,3,i*3+1),plt.imshow(images[i*3],'gray')
-        plt.title(titles[i*3]), plt.xticks([]), plt.yticks([])
-        plt.subplot(3,3,i*3+2),plt.hist(images[i*3].ravel(),256)
-        plt.title(titles[i*3+1]), plt.xticks([]), plt.yticks([])
-        plt.subplot(3,3,i*3+3),plt.imshow(images[i*3+2],'gray')
-        plt.title(titles[i*3+2]), plt.xticks([]), plt.yticks([])
-    plt.show()
+    # # Otsu's thresholding after Gaussian filtering (from OpenCV documentation, to reduce noise and improve the thresholding result)
+    # blur = cv.GaussianBlur(img,(5,5),0)
+    # ret3,th3 = cv.threshold(blur,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU)
+    # mask3 = cv.inRange(th3)
 
     return 
+
