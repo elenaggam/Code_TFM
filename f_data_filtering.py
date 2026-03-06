@@ -750,6 +750,18 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
 
 # binary mask to select the area outside of the nanoparticle
 def otsu_mask(s, directory):
+    '''
+    Creates a binary mask using Otsu's thresholding method to select the area outside of the nanoparticle in the EELS spectrum.
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    directory : str
+        The directory where the results will be saved.
+    Returns:
+    --------
+    None
+    '''
 
     # Sum the energy channels to get a 2D array (flat image)
     image = s.sum(axis=2).data
@@ -798,4 +810,63 @@ def otsu_mask(s, directory):
     # mask3 = cv.inRange(th3)
 
     return 
+
+def apply_mask(s, directory, mask_file="otsu_mask.txt"):
+    '''
+    Applies a binary mask to the original EELS spectrum to select the area outside of the nanoparticle.
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    directory : str
+        The directory where the results will be saved.
+    mask_file : str
+        The name of the text file containing the binary mask, in the same directory.
+    Returns:
+    --------
+    hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The masked EELS spectrum, with values inside the nanoparticle set to zero.
+    '''
+
+    # Load the binary mask from the text file
+    mask = np.loadtxt(directory+mask_file, dtype=int)
+
+    # Apply the mask to the original 3D EELS spectrum (set values inside the nanoparticle to zero)
+    masked_data = s.data * mask[:,:,np.newaxis]  # Broadcasting the mask to match the shape of the data
+
+    # Create a new EELSSpectrum with the masked data
+    masked_spectrum = hs.signals.EELSSpectrum(masked_data, axes_manager=s.axes_manager.deepcopy())
+
+    return masked_spectrum
+
+
+
+# calculation of the dielectric function from the EELS spectrum using Kramers-Kronig analysis
+def dielectric_function(s, directory):
+    '''
+    Calculates the dielectric function from the EELS spectrum using Kramers-Kronig analysis.
+
+    Parameters:
+    -----------
+    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
+        The input (EELS) spectrum.
+    directory : str
+        The directory where the results will be saved.
+
+    Returns:
+    --------
+    None
+    '''
+
+    thickness = s.estimate_thickness(threshold=None, zlp=None, density=None, mean_free_path=None)
+    diel = s.kramers_kronig_analysis(zlp=None, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
+    diel.save(directory+"dielectric_function.hspy")
+    diel.plot()
+    plt.show()
+    return
+
+dir = "C:/Users/lgarc/OneDrive/Escritorio/Universidad/Máster/TFM/Data/Triangle/"
+s = hs.load(dir+'4-STEM SI.hspy') # Load your EELS spectrum here
+s2 = apply_mask(s, dir)
+dielectric_function(s2, dir)
 
