@@ -5,6 +5,7 @@ from scipy.interpolate import interp1d
 import time
 import os
 import cv2 as cv
+from exspy.signals import EELSSpectrum
 
 
 # Background calculation for EELS spectra
@@ -375,13 +376,13 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
     outp = directory + "logs/"
     if not os.path.exists(outp):
         os.makedirs(outp)
-    file_time = open(outp+f'{nx}_{ny}_best_avg_roi_time.txt', 'w')
-    file_time.write("\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime in iteration\ttime remaining\n")
+
+    # file_time.write("\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime in iteration\ttime remaining\n")
 
     abs_start_time = time.time()
-    perc = 10
+    # perc = 10
     for i in range(steps_x):
-        start_t= time.time()
+        # start_t= time.time()
 
         # roi dimensions in x
         x_start = x0 + i * delta_step_x
@@ -415,29 +416,26 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
                 x_best = (x_start, x_end)
                 y_best = (y_start, y_end)
 
-        t = time.time()
-        a = (i+1)*100/steps_x
-        if a >= perc:
-            if perc == 100:
-                break
-            remaining = (t - start_t)*(steps_x - i - 1)
-            if remaining > 3600:
-                file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/3600:.2f} h\n")
-            if remaining < 60:
-                file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining:.2f} s\n")
-            else:
-                file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/60:.2f} min\n")
-            perc = round(a) + 10
+        # t = time.time()
+        # a = (i+1)*100/steps_x
+        # if a >= perc:
+        #     if perc == 100:
+        #         break
+        #     remaining = (t - start_t)*(steps_x - i - 1)
+        #     if remaining > 3600:
+        #         file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/3600:.2f} h\n")
+        #     if remaining < 60:
+        #         file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining:.2f} s\n")
+        #     else:
+        #         file_time.write(f"{perc}\t\t{t - start_t:.2f} s\t\t\t{remaining/60:.2f} min\n")
+        #     perc = round(a) + 10
 
 
     total_t = time.time() - abs_start_time
-    file_time.write(f"{100}\t\t{t - start_t:.2f} s\t\t\tTotal runtime: {total_t:.2f} s\n")
-    file_time.close()
-    
-
-    file = open(outp+f'{nx}_{ny}_best_avg_roi.txt', 'w')
-    file.write('x_start\tx_end\ny_start\ty_end\tbest_avg\truntime(s)\tx_steps\ty_steps\tdelta_step_x\tdelta_step_y\n')
-    file.write(f'{x_best[0]}\t{x_best[1]}\n{y_best[0]}\t{y_best[1]}\t{best_avg}\t{total_t:.2f}\t{steps_x}\t{steps_y}\t{delta_step_x:.2f}\t{delta_step_y:.2f}')
+    file = open(outp+f'best_avg_roi.txt', 'a')
+    if os.stat(outp+f'best_avg_roi.txt').st_size == 0:
+        file.write('t(s)\tx0\txf\ty0\tyf\tnx\tny\tavg\tx_steps\ty_steps\tdelta_x\tdelta_y\n')
+    file.write(f'{total_t:.2f}\t{x_best[0]:.3f}\t{x_best[1]:.3f}\t{y_best[0]:.3f}\t{y_best[1]:.3f}\t{best_avg:.3f}\t{nx}\t{ny}\t{steps_x}\t{steps_y}\t{delta_step_x:.2f}\t{delta_step_y:.2f}')
     file.close()
 
     return x_best, y_best
@@ -626,7 +624,14 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
     '''
     Complete background removal from EELS spectra by calculating the background and correcting negative intensity values.
     '''
-    t_init = time.time()
+    
+    # Create output directory
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    logs = directory + 'logs/'
+    if not os.path.exists(logs):
+        os.makedirs(logs)
+
     # print("\nStarting background removal...\n")
     s.align_zero_loss_peak()
     # print("Zero-loss peak aligned")
@@ -650,14 +655,8 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
     
         s = intensity_correction(s, threshold, E, name_ic)
 
-    s.save(directory+name_bg+'_'+name_ic+'_background_removed.hspy')
-    total_time = time.time() - t_init
-    outp = directory + "logs/"
-    if not os.path.exists(outp):
-        os.makedirs(outp)
-    file_time = open(outp+f'{name_bg}_{name_ic}_background_removal_time.txt', 'w')
-    file_time.write(f"\nBackground removal completed in {total_time:.2f} seconds ({total_time/60:.2f} minutes).\n")
-    file_time.close()
+    s.save(directory+'Data.hspy')
+
     return 
 
 
@@ -771,7 +770,8 @@ def otsu_mask(s, directory):
 
     # Otsu's thresholding to get a binary mask (values of 0 inside and 1 outside)
     _, mask = cv.threshold(img_8bit, 0, 1, cv.THRESH_BINARY+cv.THRESH_OTSU)
-    
+    mask = 1 - mask  # Invert the mask to have 1 outside the nanoparticle and 0 inside
+
     # Save the binary mask as a text file with integer values (0 and 1) with the 2D image's size
     np.savetxt(directory+"otsu_mask.txt", mask, fmt="%d")
     histogram, bin_edges = np.histogram(img_8bit.ravel(), bins=256)
@@ -801,7 +801,7 @@ def otsu_mask(s, directory):
     plt.xticks([])
     plt.yticks([])
 
-    plt.savefig(directory+"otsu_thresholding.png", dpi=300, bbox_inches='tight')
+    plt.savefig(directory+"otsu_results.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # # Otsu's thresholding after Gaussian filtering (from OpenCV documentation, to reduce noise and improve the thresholding result)
@@ -824,20 +824,17 @@ def apply_mask(s, directory, mask_file="otsu_mask.txt"):
         The name of the text file containing the binary mask, in the same directory.
     Returns:
     --------
-    hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The masked EELS spectrum, with values inside the nanoparticle set to zero.
+    None
     '''
 
     # Load the binary mask from the text file
     mask = np.loadtxt(directory+mask_file, dtype=int)
 
     # Apply the mask to the original 3D EELS spectrum (set values inside the nanoparticle to zero)
-    masked_data = s.data * mask[:,:,np.newaxis]  # Broadcasting the mask to match the shape of the data
+    for k in range(s.data.shape[2]):  # iterate over energy channels
+        s.data[:,:,k] *= mask  # set values inside the nanoparticle to zero 
 
-    # Create a new EELSSpectrum with the masked data
-    masked_spectrum = hs.signals.EELSSpectrum(masked_data, axes_manager=s.axes_manager.deepcopy())
-
-    return masked_spectrum
+    return 
 
 
 
@@ -857,16 +854,33 @@ def dielectric_function(s, directory):
     --------
     None
     '''
+    # threshold of the zlp to estimate the thickness of the sample
+    thr = s.estimate_elastic_scattering_threshold()
+    if np.any(np.isnan(thr.data)): # fixing issues NaN
+        thr.data = np.nan_to_num(thr.data, nan=np.nanmedian(thr.data))
 
-    thickness = s.estimate_thickness(threshold=None, zlp=None, density=None, mean_free_path=None)
-    diel = s.kramers_kronig_analysis(zlp=None, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
+    # thickness calculation
+    thickness = s.estimate_thickness(threshold=thr)
+
+    # zlp calculation in the area used for background removal
+    for f in os.listdir(directory):
+        if f.endswith("best_avg_roi.txt"):
+            aux = np.loadtxt(directory+f, skiprows=1)
+            x = (aux[0], aux[1])
+            y = (aux[2], aux[3])
+            break
+    small_s = get_roi_E(s, x, y)
+    zlp = small_s.mean(axis=(0,1))
+    zlp = EELSSpectrum(zlp.data, axes=[s.axes_manager.signal_axes[0].copy()])
+    I =np.trapezoid(zlp.data)
+    del small_s, zlp
+    print(I)
+
+    apply_mask(s, directory)
+    diel = s.kramers_kronig_analysis(zlp=I, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
     diel.save(directory+"dielectric_function.hspy")
     diel.plot()
     plt.show()
     return
 
-dir = "C:/Users/lgarc/OneDrive/Escritorio/Universidad/Máster/TFM/Data/Triangle/"
-s = hs.load(dir+'4-STEM SI.hspy') # Load your EELS spectrum here
-s2 = apply_mask(s, dir)
-dielectric_function(s2, dir)
 
