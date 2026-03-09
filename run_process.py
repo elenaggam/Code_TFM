@@ -15,7 +15,12 @@ background = {
     "name_ic": 'naive'
 }
 
-components_method = 'sklearn_pca'
+E = [.5, 3.5]
+str_E = '5_35'
+
+components_method = 'sklearn_nnmf'
+
+back_done = True
 
 for data_path_base in list_directories: 
     dm4_files = [f for f in os.listdir(data_path_base) if f.endswith('.dm4')]
@@ -23,20 +28,29 @@ for data_path_base in list_directories:
     for dm4_file in dm4_files: 
         file_index = dm4_files.index(dm4_file)
         dir_output = data_path_base + f'{file_index}/' + background["name_bg"] + '_' + background["name_ic"] + '_BR/'
-
-        # load the original spectrum
-        original = hs.load(os.path.join(data_path_base, dm4_file))[-1]
-        print(f'Loaded file: {dm4_file}')
-
-        # remove the background from the original spectrum and save the result
-        df.background_removal(dir_output, original)
+        
+        if not back_done:
+            # load the original spectrum
+            original = hs.load(os.path.join(data_path_base, dm4_file))[-1]
+            print(f'Loaded file: {dm4_file}')
+    
+            # remove the background from the original spectrum and save the result
+            df.background_removal(dir_output, original)
 
         # load the background removed spectrum
         for file in os.listdir(dir_output): 
             if file.endswith('Data.hspy'): 
                 new = hs.load(os.path.join(dir_output, file))
         print(f'Background removed spectrum loaded: {file}')
-
+        
+        if E: 
+            new = new.isig[E[0]:E[1]]
+            dir_output = dir_output + str_E + '/'
+            if not os.path.exists(dir_output):
+                os.makedirs(dir_output) 
+            if not os.path.exists(dir_output+'logs/'):
+                os.makedirs(dir_output+'logs/')
+                
         # apply dimensionality reduction to the background removed spectrum
         t_init = time.time()
 

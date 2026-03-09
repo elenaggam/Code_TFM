@@ -716,6 +716,7 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     if plot_variance_ratio:
         s.plot_explained_variance_ratio(n=max_points, vline=True)
         plt.savefig(directory+f"{method}_explained_variance_ratio.png", dpi=300, bbox_inches="tight")
+        plt.close()
     
     a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
 
@@ -740,6 +741,7 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
 
             _ = sc.plot_decomposition_loadings([i],title='')
             plt.savefig(dir_components+f"Componente_{i+1}.png",dpi=600, bbox_inches='tight')
+            plt.close()
     
 
 
