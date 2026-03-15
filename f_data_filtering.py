@@ -662,7 +662,7 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=True, save_components=True, plot_variance_ratio=True):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=True, save_components=True, plot_variance_ratio=True, cmap='coolwarm'):
     '''
     Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
@@ -696,51 +696,60 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
         print("\nIn components_reduction: unknown method name, using 'sklearn_pca' instead\n")
         method = 'sklearn_pca'
 
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
     s.decomposition(method) 
 
     # save summary in a text file
     if save_summary:
         lr = s.learning_results
-        n_components = lr.loadings.shape[1]
+        N_comp = lr.loadings.shape[1]
         explained_variance = lr.explained_variance
         explained_variance_ratio = lr.explained_variance_ratio
         outp = directory + "logs/"
         if not os.path.exists(outp):
             os.makedirs(outp)
-        with open(outp+f"{method}_summary_table.txt", "w") as f:
+        with open(outp+f"summary_table.txt", "w") as f:
             f.write("Component\tExplainedVariance\tExplainedVarianceRatio\n")
-            for i in range(n_components):
+            for i in range(N_comp):
                 f.write(f"{i+1}\t{explained_variance[i]}\t{explained_variance_ratio[i]}\n")
 
     # plot explained variance ratio    
     if plot_variance_ratio:
         s.plot_explained_variance_ratio(n=max_points, vline=True)
-        plt.savefig(directory+f"{method}_explained_variance_ratio.png", dpi=300, bbox_inches="tight")
+        plt.savefig(directory+f"logs/explained_variance_ratio.png", dpi=300, bbox_inches="tight")
         plt.close()
     
-    a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
+    if n_components is not None:
+        a = n_components
+    else:
+        a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
 
     # save new signal with the most relevant components
     sc = s.get_decomposition_model(a)
-    sc.save(directory+f"{method}_{a}_components.hspy")
+    sc.save(directory+f"{a}_components.hspy")
 
     # save each component as a separate file
     if save_components:
         # factors = s.get_decomposition_factors().as_signal1D(1)
         # loadings = s.get_decomposition_loadings()
-        dir_components = directory + f"{method}_components/"
+        dir_components = directory + f"components/"
 
         if not os.path.exists(dir_components):
             os.makedirs(dir_components)
 
-        for i in range(a+5): # save a few more components than the elbow point, to be sure not to lose relevant information
+        for i in range(a+7): # save a few more components than the elbow point, to be able to compare them and check if the elbow point is well chosen
             # component = np.einsum('ij,k->ijk', loadings.data[:,i], factors.data[i,:])
             # component_signal = hs.signals.Signal2D(component)
             # component_signal.axes_manager = factors.axes_manager.deepcopy()
             # component_signal.save(dir_components+f"{i+1}.hspy")
 
-            _ = sc.plot_decomposition_loadings([i],title='')
-            plt.savefig(dir_components+f"Componente_{i+1}.png",dpi=600, bbox_inches='tight')
+            _ = sc.plot_decomposition_loadings([i],title='', cmap=cmap)
+            plt.savefig(dir_components+f"{i+1}.png",dpi=600, bbox_inches='tight')
+            plt.close()
+            _ = sc.plot_decomposition_factors([i], title='')
+            plt.savefig(dir_components+f"{i+1}_factor.png",dpi=600, bbox_inches='tight')
             plt.close()
     
 
@@ -750,34 +759,42 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
 
 
 # binary mask to select the area outside of the nanoparticle
-def otsu_mask(s, directory):
+def get_mask(s, directory, method='otsu'):
     '''
-    Creates a binary mask using Otsu's thresholding method to select the area outside of the nanoparticle in the EELS spectrum.
+    Creates a binary mask using the specified method to select the area outside of the nanoparticle in the EELS spectrum.
     Parameters:
     -----------
-    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The input (EELS) spectrum.
+    s : scan
     directory : str
         The directory where the results will be saved.
+    method : str
+        The method to use for creating the binary mask ('otsu' or 'adaptive').
     Returns:
     --------
     None
     '''
 
-    # Sum the energy channels to get a 2D array (flat image)
-    image = s.sum(axis=2).data
     # Normalize the image to the range [0, 255] and convert to uint8 (8-bit unsigned integer to be compatible with OpenCV functions)
+    image = s.data
     image_norm = 255 * (image - np.min(image)) / (np.max(image) - np.min(image))
     img_8bit = image_norm.astype(np.uint8)
 
     # Otsu's thresholding to get a binary mask (values of 0 inside and 1 outside)
-    _, mask = cv.threshold(img_8bit, 0, 1, cv.THRESH_BINARY+cv.THRESH_OTSU)
+    if method not in ['otsu', 'adaptive']:
+        print("\nIn get_mask: unknown method name, using 'otsu' instead\n")
+        method = 'otsu'
+
+    if method == 'otsu':
+        _, mask = cv.threshold(img_8bit, 0, 1, cv.THRESH_BINARY+cv.THRESH_OTSU)
+
+    elif method == 'adaptive':
+        mask = cv.adaptiveThreshold(img_8bit, 1, adaptiveMethod=cv.ADAPTIVE_THRESH_GAUSSIAN_C, thresholdType=cv.THRESH_BINARY, blockSize=99, C=-3)
     mask = 1 - mask  # Invert the mask to have 1 outside the nanoparticle and 0 inside
 
     # Save the binary mask as a text file with integer values (0 and 1) with the 2D image's size
-    np.savetxt(directory+"otsu_mask.txt", mask, fmt="%d")
+    np.savetxt(directory+method+"_mask.txt", mask, fmt="%d")
     histogram, bin_edges = np.histogram(img_8bit.ravel(), bins=256)
-    np.savetxt(directory+"otsu_histogram.txt", np.column_stack((bin_edges[:-1], histogram)), fmt="%d")
+    np.savetxt(directory+method+"_histogram.txt", np.column_stack((bin_edges[:-1], histogram)), fmt="%d")
 
     # Plot the images and the histogram
     plt.figure(figsize=(15, 5))
@@ -799,11 +816,11 @@ def otsu_mask(s, directory):
     # masked image
     plt.subplot(1, 3, 3)
     plt.imshow(mask, cmap='gray', aspect='equal')
-    plt.title("Otsu's Thresholding")
+    plt.title(f"{method.capitalize()}'s Thresholding")
     plt.xticks([])
     plt.yticks([])
 
-    plt.savefig(directory+"otsu_results.png", dpi=300, bbox_inches='tight')
+    plt.savefig(directory+method+"_results.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # # Otsu's thresholding after Gaussian filtering (from OpenCV documentation, to reduce noise and improve the thresholding result)
@@ -838,10 +855,54 @@ def apply_mask(s, directory, mask_file="otsu_mask.txt"):
 
     return 
 
+def merge_masks(directory, mask_files=["otsu_mask.txt", "adaptive_mask.txt"]):
+    '''
+    Merges two binary masks (from Otsu's and adaptive thresholding) to create a more accurate mask of the area outside of the nanoparticle.
+    Parameters:
+    -----------
+    directory : str
+        The directory where the results will be saved.
+    mask_files : list of str
+        The names of the text files containing the binary masks to be merged, in the same directory (default is ["otsu_mask.txt", "adaptive_mask.txt"]).
+    Returns:
+    --------
+    None
+    '''
+
+    if not os.path.exists(directory+mask_files[0]) or not os.path.exists(directory+mask_files[1]):
+        raise FileNotFoundError("\nIn merge_masks: one or both mask files not found in the directory\n")
+    
+    otsu = np.loadtxt(directory+mask_files[0], dtype=int)
+    adaptive = np.loadtxt(directory+mask_files[1], dtype=int)
+    mask = (1-otsu) + (1-adaptive)
+    mask = np.clip(mask, 0, 1)
+    mask = 1 - mask  # Invert the mask to have 1 outside the nanoparticle and 0 inside
+
+    np.savetxt(directory+"merged_mask.txt", mask, fmt="%d")
+
+    plt.figure(figsize=(15, 5))
+
+    plt.subplot(1, 3, 1)
+    plt.imshow(otsu, cmap='gray', aspect='equal')
+    plt.title("Otsu's Thresholding Mask")
+    plt.subplot(1, 3, 2)
+    plt.imshow(adaptive, cmap='gray', aspect='equal')
+    plt.title("Adaptive Thresholding Mask")
+    # masked image
+    plt.subplot(1, 3, 3)
+    plt.imshow(mask, cmap='gray', aspect='equal')
+    plt.title(f"Merged mask")
+    plt.xticks([])
+    plt.yticks([])
+
+    plt.savefig(directory+"merged_mask_results.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+
 
 
 # calculation of the dielectric function from the EELS spectrum using Kramers-Kronig analysis
-def dielectric_function(s, directory):
+def dielectric_function(s, directory, dir_mask, dir_zlp):
     '''
     Calculates the dielectric function from the EELS spectrum using Kramers-Kronig analysis.
 
@@ -851,38 +912,51 @@ def dielectric_function(s, directory):
         The input (EELS) spectrum.
     directory : str
         The directory where the results will be saved.
-
+    dir_mask : str
+        The directory where the binary mask is saved.
+    dir_zlp : str
+        The directory where the ZLP spectrum is saved.
     Returns:
     --------
     None
     '''
-    # threshold of the zlp to estimate the thickness of the sample
-    thr = s.estimate_elastic_scattering_threshold()
-    if np.any(np.isnan(thr.data)): # fixing issues NaN
-        thr.data = np.nan_to_num(thr.data, nan=np.nanmedian(thr.data))
+    zlp = hs.load(dir_zlp)[-1] 
+    thickness = s.estimate_thickness(zlp=zlp)
 
-    # thickness calculation
-    thickness = s.estimate_thickness(threshold=thr)
+    apply_mask(s, dir_mask)
 
-    # zlp calculation in the area used for background removal
-    for f in os.listdir(directory):
-        if f.endswith("best_avg_roi.txt"):
-            aux = np.loadtxt(directory+f, skiprows=1)
-            x = (aux[0], aux[1])
-            y = (aux[2], aux[3])
-            break
-    small_s = get_roi_E(s, x, y)
-    zlp = small_s.mean(axis=(0,1))
-    zlp = EELSSpectrum(zlp.data, axes=[s.axes_manager.signal_axes[0].copy()])
-    I =np.trapezoid(zlp.data)
-    del small_s, zlp
-    print(I)
-
-    apply_mask(s, directory)
-    diel = s.kramers_kronig_analysis(zlp=I, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
+    diel = s.kramers_kronig_analysis(zlp=zlp, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
     diel.save(directory+"dielectric_function.hspy")
     diel.plot()
     plt.show()
+
+    # # threshold of the zlp to estimate the thickness of the sample
+    # thr = s.estimate_elastic_scattering_threshold()
+    # if np.any(np.isnan(thr.data)): # fixing issues NaN
+    #     thr.data = np.nan_to_num(thr.data, nan=np.nanmedian(thr.data))
+
+    # # thickness calculation
+    # thickness = s.estimate_thickness(threshold=thr)
+
+    # # zlp calculation in the area used for background removal
+    # for f in os.listdir(directory):
+    #     if f.endswith("best_avg_roi.txt"):
+    #         aux = np.loadtxt(directory+f, skiprows=1)
+    #         x = (aux[0], aux[1])
+    #         y = (aux[2], aux[3])
+    #         break
+    # small_s = get_roi_E(s, x, y)
+    # zlp = small_s.mean(axis=(0,1))
+    # zlp = EELSSpectrum(zlp.data, axes=[s.axes_manager.signal_axes[0].copy()])
+    # I =np.trapezoid(zlp.data)
+    # del small_s, zlp
+    # print(I)
+
+    # apply_mask(s, dir_mask)
+    # diel = s.kramers_kronig_analysis(zlp=I, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
+    # diel.save(directory+"dielectric_function.hspy")
+    # diel.plot()
+    # plt.show()
     return
 
 
