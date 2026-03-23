@@ -6,21 +6,22 @@ import os
 import f_data_filtering as df
 
 
-base = "C:/Users/lgarc/OneDrive/Escritorio/Universidad/Máster/TFM/Data/"
-list_directories = [base + "Triangle/"]
-# , base + "Triangulos/", base + "Estrellas/"
+base = "C:/Users/PC_TEM/Documents/Elena/Au_NPs_Grilla_SiN/"
+suffix = '8_33/sklearn_pca/'
+list_directories =  [base + "Triangle/", base + "Triangulos/", base + "Estrellas/"]
+# [
 
 background = {
     "name_bg": 'interpolation',
     "name_ic": 'naive'
 }
 
-E = [.8, 4.5]
-str_E = '8_45'
+E = [1.,3.]
+str_E = '10_30'
 
 dir_zlp = base + 'ZLP.dm4'
 
-components_method = 'sklearn_nnmf'
+components_method = 'sklearn_pca'
 mask_method = 'adaptive'
 
 back_done = True
@@ -60,10 +61,10 @@ for data_path_base in list_directories:
         # load the background removed spectrum
         for file in os.listdir(dir_output): 
             if file.endswith('Data.hspy'): 
+                print(file)
                 new = hs.load(os.path.join(dir_output, file))
-        print(f'Background removed spectrum loaded: {file}')
         
-        if E: 
+        if E:
             new = new.isig[E[0]:E[1]]
             dir_output = dir_output + str_E + '/'
             if not os.path.exists(dir_output):
@@ -71,11 +72,16 @@ for data_path_base in list_directories:
             if not os.path.exists(dir_output+'logs/'):
                 os.makedirs(dir_output+'logs/')
                 
+        
+                
+        print(f'Background removed spectrum loaded: {file}')
         # apply dimensionality reduction to the background removed spectrum
         t_init = time.time()
+        
+        print(f'Initializing component analysis for {dir_output}')
 
         dir_output += components_method + '/'
-        df.components_reduction(dir_output, new, method=components_method, n_components=8)
+        df.components_reduction(dir_output, new, method=components_method, n_components=13)
         del new
 
         t_end = time.time()

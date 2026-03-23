@@ -655,14 +655,14 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
     
         s = intensity_correction(s, threshold, E, name_ic)
 
-    s.save(directory+'Data.hspy')
+    s.save(directory+'Data.hspy', overwrite=True)
 
     return 
 
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=True, save_components=True, plot_variance_ratio=True, cmap='coolwarm'):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=False, save_components=True, plot_variance_ratio=False, cmap='coolwarm'):
     '''
     Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
@@ -692,33 +692,34 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     None
     '''
 
-    if method not in ['sklearn_pca', 'sklearn_nnmf']:
+    if method not in ['sklearn_pca', 'NMF']:
         print("\nIn components_reduction: unknown method name, using 'sklearn_pca' instead\n")
         method = 'sklearn_pca'
 
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    s.decomposition(method) 
+    s.decomposition(algorithm=method) 
 
     # save summary in a text file
+    outp = directory + "logs/"
+    if not os.path.exists(outp):
+        os.makedirs(outp)
     if save_summary:
         lr = s.learning_results
         N_comp = lr.loadings.shape[1]
         explained_variance = lr.explained_variance
         explained_variance_ratio = lr.explained_variance_ratio
-        outp = directory + "logs/"
-        if not os.path.exists(outp):
-            os.makedirs(outp)
-        with open(outp+f"summary_table.txt", "w") as f:
+        with open(outp+"summary_table.txt", "w") as f:
             f.write("Component\tExplainedVariance\tExplainedVarianceRatio\n")
             for i in range(N_comp):
                 f.write(f"{i+1}\t{explained_variance[i]}\t{explained_variance_ratio[i]}\n")
+        print('Summary table saved')
 
     # plot explained variance ratio    
     if plot_variance_ratio:
         s.plot_explained_variance_ratio(n=max_points, vline=True)
-        plt.savefig(directory+f"logs/explained_variance_ratio.png", dpi=300, bbox_inches="tight")
+        plt.savefig(directory+"logs/explained_variance_ratio.png", dpi=300, bbox_inches="tight")
         plt.close()
     
     if n_components is not None:
@@ -728,33 +729,71 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
 
     # save new signal with the most relevant components
     sc = s.get_decomposition_model(a)
-    sc.save(directory+f"{a}_components.hspy")
+    sc.save(directory+f"{a}_components.hspy", overwrite=True)
 
     # save each component as a separate file
     if save_components:
         # factors = s.get_decomposition_factors().as_signal1D(1)
         # loadings = s.get_decomposition_loadings()
-        dir_components = directory + f"components/"
+        dir_components = directory + "components/"
 
         if not os.path.exists(dir_components):
             os.makedirs(dir_components)
 
         for i in range(a+7): # save a few more components than the elbow point, to be able to compare them and check if the elbow point is well chosen
             # component = np.einsum('ij,k->ijk', loadings.data[:,i], factors.data[i,:])
-            # component_signal = hs.signals.Signal2D(component)
-            # component_signal.axes_manager = factors.axes_manager.deepcopy()
-            # component_signal.save(dir_components+f"{i+1}.hspy")
-
-            _ = sc.plot_decomposition_loadings([i],title='', cmap=cmap)
-            plt.savefig(dir_components+f"{i+1}.png",dpi=600, bbox_inches='tight')
-            plt.close()
-            _ = sc.plot_decomposition_factors([i], title='')
-            plt.savefig(dir_components+f"{i+1}_factor.png",dpi=600, bbox_inches='tight')
-            plt.close()
+            # component_signal = hs.signals.Signal1D(component)
+            # component_signal.axes_manager.navigation_axes[0] = loadings.axes_manager.navigation_axes[0]
+            # component_signal.axes_manager.navigation_axes[1] = loadings.axes_manager.navigation_axes[1]
+            # component_signal.axes_manager.signal_axes[0] = factors.axes_manager.signal_axes[0]
+            # component_signal.save(dir_components + f"{i+1}.hspy", overwrite=True)
+            if not os.path.exists(f"{i+1}.hspy"):
+                s.get_decomposition_model(components=[i]).save(dir_components+f"{i+1}.hspy", overwrite=True)
+                _ = sc.plot_decomposition_loadings([i],title='', cmap=cmap, norm='log')
+                plt.savefig(dir_components+f"{i+1}.png",dpi=600, bbox_inches='tight')
+                plt.close()
+                _ = sc.plot_decomposition_factors([i], title='')
+                plt.savefig(dir_components+f"{i+1}_factor.png",dpi=600, bbox_inches='tight')
+                plt.close()
+                print(f'Component {i+1} saved.')
     
 
 
     return
+
+def components_rebuild(directory, n_list, name_out='rebuilt'):
+    
+    
+    for i in range(len(n_list)):
+        if i==0:
+            s = hs.load(directory+f"components/{n_list[i]}.hspy")
+        else:
+            s.data += hs.load(directory+f"components/{n_list[i]}.hspy").data
+    s.metadata.General.title = "New Spectrum"
+    s.save(directory+name_out+'.hspy', overwrite=True)  
+    return s
+
+def components_rebuild_file(comp_file, file_line, data_dir, output_name='rebuilt', all=False):
+    
+
+    comp = []
+    with open(comp_file) as f:
+        for i, line in enumerate(f):
+            if i == file_line:  
+                row = [int(x) for x in line.split()]
+                comp.append(row)
+                break
+    # if we want to take intermediate components that are not in the file
+    if all:
+        new_list = [j+1 for j in range(comp[-1])]
+        components_rebuild(data_dir, new_list, output_name)
+    # just the specified components
+    else:
+        components_rebuild(data_dir, comp, output_name)
+           
+                
+    return
+        
 
 
 
@@ -830,28 +869,26 @@ def get_mask(s, directory, method='otsu'):
 
     return 
 
-def apply_mask(s, directory, mask_file="otsu_mask.txt"):
+def apply_mask(s, mask_file):
     '''
     Applies a binary mask to the original EELS spectrum to select the area outside of the nanoparticle.
     Parameters:
     -----------
     s : hs.signals.EELSSpectrum or hs.signals.Signal1D
         The input (EELS) spectrum.
-    directory : str
-        The directory where the results will be saved.
     mask_file : str
-        The name of the text file containing the binary mask, in the same directory.
+        The name of the text file containing the binary mask
     Returns:
     --------
     None
     '''
 
     # Load the binary mask from the text file
-    mask = np.loadtxt(directory+mask_file, dtype=int)
+    mask = np.loadtxt(mask_file, dtype=int)
 
     # Apply the mask to the original 3D EELS spectrum (set values inside the nanoparticle to zero)
     for k in range(s.data.shape[2]):  # iterate over energy channels
-        s.data[:,:,k] *= mask  # set values inside the nanoparticle to zero 
+        s.data[:,:,k] *=(1-mask)  # set values inside the nanoparticle to zero 
 
     return 
 
@@ -902,7 +939,7 @@ def merge_masks(directory, mask_files=["otsu_mask.txt", "adaptive_mask.txt"]):
 
 
 # calculation of the dielectric function from the EELS spectrum using Kramers-Kronig analysis
-def dielectric_function(s, directory, dir_mask, dir_zlp):
+def dielectric_function(s, zlp, directory, dir_mask):
     '''
     Calculates the dielectric function from the EELS spectrum using Kramers-Kronig analysis.
 
@@ -920,16 +957,36 @@ def dielectric_function(s, directory, dir_mask, dir_zlp):
     --------
     None
     '''
-    zlp = hs.load(dir_zlp)[-1] 
-    thickness = s.estimate_thickness(zlp=zlp)
+
+    print(zlp)
+    print(s)
+    thickness = hs.load(directory+'Relative thickness.dm4').data
+    print(thickness.shape)
+    t = s.isig[0].copy() 
+    
+    # 3. Inyectar los datos del espesor en ese clon
+    # Al ser s.isig[0], ya tiene dimensiones (422, 321) y los ejes perfectos
+    t.data = thickness
+    
+    # Limpieza de seguridad
+    t.data[t.data <= 0] = 1e-9
+    
+    # Cambiar el nombre para que no se confunda con EELS
+    t.metadata.General.title = "Thickness Map"
 
     apply_mask(s, dir_mask)
 
-    diel = s.kramers_kronig_analysis(zlp=zlp, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
-    diel.save(directory+"dielectric_function.hspy")
+    diel = s.kramers_kronig_analysis(zlp=zlp, iterations=2, n=None, t=t, delta=0.5, full_output=False)
+    diel.save(directory+"dielectric_function.hspy", overwrite=True)
     diel.plot()
     plt.show()
-
+    
+    diel.real.plot()
+    plt.show()
+    diel.imag.plot()
+    plt.show()
+    
+    
     # # threshold of the zlp to estimate the thickness of the sample
     # thr = s.estimate_elastic_scattering_threshold()
     # if np.any(np.isnan(thr.data)): # fixing issues NaN
