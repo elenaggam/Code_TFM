@@ -49,7 +49,7 @@ def check_roi_E(s, x, y, E=None):
     E_check = True
     if E is not None:
         E_range = (float(np.round(s.axes_manager[2].axis[0], 2)), float(np.round(s.axes_manager[2].axis[-1], 2)))
-        if E[0] >= E[1] or np.any(np.array(E) < E_range[0]) or E[1] > E_range[1] or E[0] < E_range[0]:
+        if E[0] >= E[1] or E[1] > E_range[1] or E[0] < E_range[0]:
             E_check = False
 
 
@@ -196,13 +196,18 @@ def background_thesis(s, b):
         # divide each of the reduced spectra by the background, channel by channel, search minimum
     for i in range(s.data.shape[0]):  # x-axis
         for j in range(s.data.shape[1]):  # y-axis
+            #print(f"Processing pixel ({i}, {j})...")
+            #print(s.data[i,j,:].shape, b.shape)
             C_ij = s.data[i,j,:]/b
+            #print(C_ij.shape)
 
             # global minimum point and corresponding intensity values
             # I_min = np.min(C_ij)
-            E_min = np.argmin(C_ij)  # int, index of the global minimum point of C_ij
-            S_min = s.data[i,j,E_min]
-            Ib_min = b[E_min]
+            E_min_ij = np.argmin(C_ij)  # int, index of the global minimum point of C_ij
+            # I_min_ij = C_ij[E_min_ij]  # float, minimum value of C_ij
+            S_min = s.data[i,j,E_min_ij] # s at E_min_ij
+            Ib_min = b[E_min_ij]
+
 
             # normalise the background with respect to each one of the spectra
             # subtract the normalised background from each of the spectra
@@ -359,7 +364,7 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
     if nx <= 0 or ny <= 0:
         raise ValueError("\nIn get_avg_roi: invalid ROI size, nx and ny must be positive\n")
     
-    best_avg = np.max(s.data)  # Initialize with the maximum possible value
+    best_avg = np.min(s.data)  # Initialize with the minimum possible value
     x_best = None
     y_best = None
 
@@ -407,11 +412,9 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
                 print("Invalid roi at x: ", (x_start, x_end), " y: ", (y_start, y_end), ', skipping...\n')
                 continue
 
-            roi = hs.roi.RectangularROI(left=x_start, right=x_end, top=y_start, bottom=y_end)
-            small_s = roi(s)
-
-            avg = get_avg_in_window(small_s, threshold, E)
-            if avg is not None and avg < best_avg: # Looking for the lowest average, as counts rise as we hit the nanoparticle
+            small_s = get_roi_E(s, (x_start, x_end), (y_start, y_end), E)
+            avg = get_avg_in_window(small_s, threshold)
+            if avg is not None and avg > best_avg: # Looking for the lowest average, as counts rise as we hit the nanoparticle
                 best_avg = avg
                 x_best = (x_start, x_end)
                 y_best = (y_start, y_end)
@@ -434,8 +437,10 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
     total_t = time.time() - abs_start_time
     file = open(outp+f'best_avg_roi.txt', 'a')
     if os.stat(outp+f'best_avg_roi.txt').st_size == 0:
-        file.write('t(s)\tx0\txf\ty0\tyf\tnx\tny\tavg\tx_steps\ty_steps\tdelta_x\tdelta_y\n')
-    file.write(f'{total_t:.2f}\t{x_best[0]:.3f}\t{x_best[1]:.3f}\t{y_best[0]:.3f}\t{y_best[1]:.3f}\t{best_avg:.3f}\t{nx}\t{ny}\t{steps_x}\t{steps_y}\t{delta_step_x:.2f}\t{delta_step_y:.2f}')
+        file.write(f't(s)\t{total_t:.2f}\nx0\t{x0}\nxf\t{xf}\ny0\t{y0}\nyf\t{yf}\nnx\t{nx}\nny\t{ny}\navg\t{best_avg:.3f}\nx_steps\t{steps_x}\ny_steps\t{steps_y}\ndelta_x\n{delta_step_x:.2f}\ndelta_y\t{delta_step_y:.2f}\nthreshold(eV)\t{threshold:.2f}\n')
+    if E:
+        file.write(f'Energy range: {E[0]}-{E[1]} eV\n')
+    file.write(f'x_best\t{x_best[0]}\ny_best\t{y_best[0]}\n')
     file.close()
 
     return x_best, y_best
@@ -620,7 +625,7 @@ def intensity_correction(s, threshold=0, E=None, name='naive'):
 
 
 # complete background removal: background area selection, calculation + correction of negative values
-def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None, steps_x=20, steps_y=20, delta_step_x=None, delta_step_y=None, E=None, name_bg='interpolation', name_ic='naive', threshold=0):
+def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None, steps_x=40, steps_y=30, delta_step_x=None, delta_step_y=None, E=None, name_bg='interpolation', name_ic='naive', threshold=1e8):
     '''
     Complete background removal from EELS spectra by calculating the background and correcting negative intensity values.
     '''
@@ -636,7 +641,7 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
     s.align_zero_loss_peak()
     # print("Zero-loss peak aligned")
 
-    x, y = best_avg_roi(directory, s, nx, ny, threshold=threshold, E=E, x0=x0, y0=y0, xf=xf, yf=yf, steps_x=steps_x, steps_y=steps_y, delta_step_x=delta_step_x, delta_step_y=delta_step_y)
+    x, y = best_avg_roi(directory, s, nx, ny, threshold=s.data.max(), E=E, x0=x0, y0=y0, xf=xf, yf=yf, steps_x=steps_x, steps_y=steps_y, delta_step_x=delta_step_x, delta_step_y=delta_step_y)
     # print(f"Best ROI found at x: {x} y: {y}")
 
     if name_bg not in ['constant', 'interpolation', 'thesis']:
@@ -644,10 +649,11 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
         name_bg = 'interpolation'
     
     if name_bg == 'thesis':
-        b = background_interpolation(s, x, y, E)
+        b = background_interpolation(s, x, y)
         s = background_thesis(s, b)
     else:
-        s = s- get_background(s, x, y, E, name_bg)
+        b = get_background(s, x, y, name=name_bg)
+        s = s - b
 
         if name_ic not in ['naive', 'threshold', 'averaged', 'zero']:
             print("\nIn background_removal: unknown method name for intensity correction, using 'naive' instead\n")
@@ -656,13 +662,13 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
         s = intensity_correction(s, threshold, E, name_ic)
 
     s.save(directory+'Data.hspy', overwrite=True)
-
+    np.savetxt(directory+'Background.hspy', b)
     return 
 
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_summary=False, save_components=True, plot_variance_ratio=False, cmap='coolwarm'):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_components=False, plot_components=True, cmap='coolwarm'):
     '''
     Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
@@ -680,12 +686,10 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
         The number of components to keep (default is None, meaning it will be determined by the elbow method).
     max_points : int
         The maximum number of components to consider for the elbow method (default is 40).  
-    save_summary : bool
-        Whether to save a summary table of the explained variance and explained variance ratio for each component (default is True).
     save_components : bool
-        Whether to save each component as a separate file (default is True).
-    plot_variance_ratio : bool
-        Whether to plot the explained variance ratio for each component (default is True).
+        Whether to save each component as a separate file (default is False).
+    plot_components : bool
+        Whether to plot each component (default is True).
 
     Returns:
     --------
@@ -699,13 +703,14 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    s.decomposition(algorithm=method) 
+    if method == 'NMF':
+        s.decomposition(algorithm=method, output_dimension=n_components, max_iter=500000)
+    else:
+        outp = directory + "logs/"
+        if not os.path.exists(outp):
+            os.makedirs(outp)
+        s.decomposition(algorithm=method) 
 
-    # save summary in a text file
-    outp = directory + "logs/"
-    if not os.path.exists(outp):
-        os.makedirs(outp)
-    if save_summary:
         lr = s.learning_results
         N_comp = lr.loadings.shape[1]
         explained_variance = lr.explained_variance
@@ -715,12 +720,11 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
             for i in range(N_comp):
                 f.write(f"{i+1}\t{explained_variance[i]}\t{explained_variance_ratio[i]}\n")
         print('Summary table saved')
-
-    # plot explained variance ratio    
-    if plot_variance_ratio:
+        
         s.plot_explained_variance_ratio(n=max_points, vline=True)
         plt.savefig(directory+"logs/explained_variance_ratio.png", dpi=300, bbox_inches="tight")
         plt.close()
+
     
     if n_components is not None:
         a = n_components
@@ -732,23 +736,16 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     sc.save(directory+f"{a}_components.hspy", overwrite=True)
 
     # save each component as a separate file
-    if save_components:
-        # factors = s.get_decomposition_factors().as_signal1D(1)
-        # loadings = s.get_decomposition_loadings()
+    if save_components or plot_components:
         dir_components = directory + "components/"
 
         if not os.path.exists(dir_components):
             os.makedirs(dir_components)
 
-        for i in range(a+7): # save a few more components than the elbow point, to be able to compare them and check if the elbow point is well chosen
-            # component = np.einsum('ij,k->ijk', loadings.data[:,i], factors.data[i,:])
-            # component_signal = hs.signals.Signal1D(component)
-            # component_signal.axes_manager.navigation_axes[0] = loadings.axes_manager.navigation_axes[0]
-            # component_signal.axes_manager.navigation_axes[1] = loadings.axes_manager.navigation_axes[1]
-            # component_signal.axes_manager.signal_axes[0] = factors.axes_manager.signal_axes[0]
-            # component_signal.save(dir_components + f"{i+1}.hspy", overwrite=True)
-            if not os.path.exists(f"{i+1}.hspy"):
+        for i in range(a): 
+            if save_components:
                 s.get_decomposition_model(components=[i]).save(dir_components+f"{i+1}.hspy", overwrite=True)
+            if plot_components:
                 _ = sc.plot_decomposition_loadings([i],title='', cmap=cmap, norm='log')
                 plt.savefig(dir_components+f"{i+1}.png",dpi=600, bbox_inches='tight')
                 plt.close()
@@ -757,9 +754,8 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
                 plt.close()
                 print(f'Component {i+1} saved.')
     
-
-
     return
+
 
 def components_rebuild(directory, n_list, name_out='rebuilt'):
     
@@ -1015,5 +1011,6 @@ def dielectric_function(s, zlp, directory, dir_mask):
     # diel.plot()
     # plt.show()
     return
+
 
 

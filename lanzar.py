@@ -1,7 +1,7 @@
 import subprocess
 import sys
 import os
-import datetime
+
 
 #import sys
 # print(sys.executable)
@@ -10,8 +10,8 @@ script = "run_process.py"
 path_script = os.path.abspath(script)
 
 
-with open("out.log", "a") as log_file:
-    print(f'{script} lanzado en {datetime.datetime.now()}. Revisa out.log para la salida.')
+with open("out_def.log", "a") as log_file:
+   
     subprocess.Popen(
         [sys.executable, path_script],  
         stdout=log_file,
