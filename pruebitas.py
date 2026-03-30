@@ -10,7 +10,18 @@ base = "C:/Users/PC_TEM/Documents/Elena/Au_NPs_Grilla_SiN/"
 dir_zlp = base + 'ZLP.dm4'
 
 suffix = "interpolation_naive_BR/8_33/sklearn_pca/rebuilt_all.hspy"
-list_dir = [base + "Triangle/0/"]
+suffix = "interpolation_naive_BR_max/8_32/sklearn_pca/3_components.hspy"
+list_dir = [base + "Triangulos/2/"]
+
+
+diel = hs.load(list_dir[0]+'dielectric_function.hspy')
+diel.plot()
+
+data = 1/diel.data
+x = np.arange(0.8, 3.2, diel.axes_manager[-1].scale)
+plt.plot(x, data)
+plt.show()
+
 
 
 E = [.8, 3.3]
