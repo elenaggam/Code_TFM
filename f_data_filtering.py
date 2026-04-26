@@ -8,6 +8,33 @@ import cv2 as cv
 from exspy.signals import EELSSpectrum
 
 
+def dm4_pre_treatment(base, b_method='interpolation'):
+    '''
+    Given a directory containing the .dm4 files, aligns the ZLP and calculates the background using the desired method
+    These files are saved in the same directory with the suffixes "Aligned.hspy" and "Back.hspy", respectively.
+    '''
+    dm4_files = [f for f in os.listdir(base) if f.endswith('.dm4')]
+    for m in range(len(dm4_files)):
+        dm4 = dm4_files[m]
+        s = hs.load(base + dm4)[-1]
+        if not os.path.exists(base + f'{m+1}-Aligned.hspy'):
+            s.align_zero_loss_peak()
+            s.save(base + f'{m+1}-Aligned.hspy', overwrite=True)
+            del s
+        if not os.path.exists(base + f'{m+1}-Back_{b_method}.hspy'):
+            s = hs.load(base + f'{m+1}-Aligned.hspy')
+            x_best, y_best = best_avg_roi(base + f'{m+1}_', s, nx=10, ny=10, threshold=s.data.max(), E=(0., 0.8))
+            b = get_background(s, x=x_best, y=y_best, name=b_method)
+            
+            b_hspy = hs.signals.Signal1D(b)
+            b_hspy.axes_manager[0].name = s.axes_manager[-1].name
+            b_hspy.axes_manager[0].units = s.axes_manager[-1].units
+            b_hspy.axes_manager[0].scale = s.axes_manager[-1].scale
+            b_hspy.axes_manager[0].offset = s.axes_manager[-1].offset
+
+            b_hspy.save(base + f'{m+1}-{b_method}_b.hspy', overwrite=True)
+    return
+
 # Background calculation for EELS spectra
 def check_roi_E(s, x, y, E=None):
     """
@@ -184,7 +211,7 @@ def background_thesis(s, b):
     -----------
     s : hs.signals.EELSSpectrum or hs.signals.Signal1D
         The input (EELS) spectrum.
-    b : np.ndarray
+    b : np.signal1d
         The background spectrum to be removed.  
     Returns:
     --------
@@ -192,54 +219,27 @@ def background_thesis(s, b):
         The background-subtracted EELS spectrum.
 
     """
+    s_ext = s.deepcopy()
+    del s
+    # divide each of the reduced spectra by the background, channel by channel, search minimum
 
-        # divide each of the reduced spectra by the background, channel by channel, search minimum
-    for i in range(s.data.shape[0]):  # x-axis
-        for j in range(s.data.shape[1]):  # y-axis
-            #print(f"Processing pixel ({i}, {j})...")
-            #print(s.data[i,j,:].shape, b.shape)
-            C_ij = s.data[i,j,:]/b
-            #print(C_ij.shape)
+    C = s_ext.data/b.data
+    #print(C_ij.shape)
 
-            # global minimum point and corresponding intensity values
-            # I_min = np.min(C_ij)
-            E_min_ij = np.argmin(C_ij)  # int, index of the global minimum point of C_ij
-            # I_min_ij = C_ij[E_min_ij]  # float, minimum value of C_ij
-            S_min = s.data[i,j,E_min_ij] # s at E_min_ij
-            Ib_min = b[E_min_ij]
+    # global minimum point and corresponding intensity values
+    # I_min = np.min(C_ij)
+    E_min_idx = np.argmin(C, axis=2)
+    S_min = np.take_along_axis(s_ext.data, E_min_idx[..., np.newaxis], axis=2)
+    IB_min = b.data[E_min_idx][..., np.newaxis]
+
+    # normalise the background with respect to each one of the spectra
+    # subtract the normalised background from each of the spectra
+    s_ext -= b*S_min/IB_min
+    print(s_ext.data.shape)
 
 
-            # normalise the background with respect to each one of the spectra
-            # subtract the normalised background from each of the spectra
-            s.data[i,j] -= b*S_min/Ib_min
+    return s_ext
 
-    # E_min = None
-    # I_min = np.max(s.data)  # initialize with maximum possible value
-    
-    # # divide each of the reduced spectra by the background, channel by channel, search minimum
-    # for i in range(s.data.shape[0]):  # x-axis
-    #     for j in range(s.data.shape[1]):  # y-axis
-    #         I = s.data[i,j]/b
-    #         if I.min() < I_min:
-    #             I_min = I.min()
-    #             E_min = np.argmin(I)  # int, index of the global minimum point of I
-
-    # print(E_min, I_min)
-    # if E_min is None:
-    #     raise ValueError("\nIn back: oops, could not find minimum intensity value\n")
-    
-    # # global minimum point, corresponding values in s (in loop) and b
-    # Ib_min = b[E_min] # float
-    # print(Ib_min)
-
-    # # normalise the background with respect to each one of the spectra
-    # # subtract the normalised background from each of the spectra
-    # for i in range(s.data.shape[0]):  # x-axis
-    #     for j in range(s.data.shape[1]):  # y-axis
-    #         s_min = s.data[i,j, E_min] # float, intensity value at E_min of each spectrum
-    #         s.data[i,j] = s.data[i,j] - b*s_min/Ib_min
-
-    return s
 
 def get_background(s, x, y, E=None, name='interpolation'):
     """
@@ -284,7 +284,7 @@ def get_background(s, x, y, E=None, name='interpolation'):
 
 
 # Criteria to select roi for background removal: lowest intensity values
-def get_avg_in_window(s, threshold=1e7, E=None):
+def get_avg_in_window(s, threshold=1e9, E=None):
     """
     Helper function to calculate the average of intensity values below a threshold.
 
@@ -318,7 +318,7 @@ def get_avg_in_window(s, threshold=1e7, E=None):
     else:
         return None
  
-def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=None, yf=None, steps_x=20, steps_y=20, delta_step_x=None, delta_step_y=None):
+def best_avg_roi(directory, s, nx, ny, threshold=1e9, E=None, x0=0, y0=0, xf=None, yf=None, steps_x=None, steps_y=None, delta_step_x=None, delta_step_y=None):
     """
     Helper function to calculate the average of intensity values below a threshold
     in a specified region of interest (ROI).
@@ -327,17 +327,17 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
     -----------
     s : hs.signals.EELSSpectrum or hs.signals.Signal1D
         The input (EELS) spectrum.
-    nx : float
+    nx : float (nm)
         The range in the x-direction to consider for ROI.
-    ny : float
+    ny : float (nm)
         The range in the y-direction to consider for ROI.
     threshold : float
         The threshold value to set for negative intensities.
     E : tuple (optional)
         The energy range to consider for the calculation in eV.
-    x0 : float
+    x0 : float (nm)
         The starting x-coordinate for ROI search (default is 0).
-    y0 : float
+    y0 : float (nm)
         The starting y-coordinate for ROI search (default is 0).
     xf : float (optional)
         The ending x-coordinate for ROI search (default is None, meaning the maximum x-axis value).
@@ -353,8 +353,6 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
         The step size for ROI search in the y direction.
     Returns:
     --------
-    best_avg : float
-        The lowest average of intensity values below the threshold found in the ROI search.
     x_best : tuple
         The x-coordinates of the best ROI found.
     y_best : tuple
@@ -368,30 +366,34 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
     x_best = None
     y_best = None
 
+    if xf is None:
+        xf = s.axes_manager[0].axis[-1]
+    if yf is None:
+        yf = s.axes_manager[1].axis[-1]
+
+    if steps_x is None:
+        steps_x = int((xf - x0)/nx)  # default number of steps to cover the whole area with half-overlapping ROIs
+    if steps_y is None:
+        steps_y = int((yf - y0)/ny)  # default number of steps to cover the whole area with half-overlapping ROIs
+    
     if delta_step_x is None:
-        if xf is None:
-            xf = s.axes_manager[0].axis[-1]
-        delta_step_x = (xf - x0 - nx) / steps_x
+        delta_step_x = (xf - x0 - nx)/float(steps_x)
+        print(delta_step_x)
 
     if delta_step_y is None:
-        if yf is None:
-            yf = s.axes_manager[1].axis[-1]
-        delta_step_y = (yf - y0 - ny) / steps_y
+        delta_step_y = (yf - y0 - ny)/float(steps_y)
         
-    outp = directory + "logs/"
-    if not os.path.exists(outp):
-        os.makedirs(outp)
-
+    
     # file_time.write("\nIn get_avg_roi: Starting ROI search.\n------------\n% completed\ttime in iteration\ttime remaining\n")
 
     abs_start_time = time.time()
-    # perc = 10
     for i in range(steps_x):
         # start_t= time.time()
 
         # roi dimensions in x
         x_start = x0 + i * delta_step_x
         x_end = x_start + nx
+        #print(i, x_start, x_end)
         if x_end > s.axes_manager[0].axis[-1]:
             print(f"In get_avg_roi: Breaking x loop at step {i}")
             break
@@ -400,6 +402,8 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
             # roi dimensions in y
             y_start = y0 + j * delta_step_y
             y_end = y_start + ny
+            
+            #print(y_start, y_end)
             if y_end > s.axes_manager[1].axis[-1]:
                 print(f"\nIn get_avg_roi: Breaking y loop at step {j}\n")
                 break
@@ -414,7 +418,7 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
 
             small_s = get_roi_E(s, (x_start, x_end), (y_start, y_end), E)
             avg = get_avg_in_window(small_s, threshold)
-            if avg is not None and avg > best_avg: # Looking for the lowest average, as counts rise as we hit the nanoparticle
+            if avg is not None and avg > best_avg: # Looking for the highest average, as counts rise as we hit the nanoparticle
                 best_avg = avg
                 x_best = (x_start, x_end)
                 y_best = (y_start, y_end)
@@ -435,9 +439,9 @@ def best_avg_roi(directory, s, nx, ny, threshold=1e7, E=None, x0=0, y0=0, xf=Non
 
 
     total_t = time.time() - abs_start_time
-    file = open(outp+f'best_avg_roi.txt', 'a')
-    if os.stat(outp+f'best_avg_roi.txt').st_size == 0:
-        file.write(f't(s)\t{total_t:.2f}\nx0\t{x0}\nxf\t{xf}\ny0\t{y0}\nyf\t{yf}\nnx\t{nx}\nny\t{ny}\navg\t{best_avg:.3f}\nx_steps\t{steps_x}\ny_steps\t{steps_y}\ndelta_x\n{delta_step_x:.2f}\ndelta_y\t{delta_step_y:.2f}\nthreshold(eV)\t{threshold:.2f}\n')
+    file = open(directory+f'best_avg_roi.txt', 'a')
+    if os.stat(directory+f'best_avg_roi.txt').st_size == 0:
+        file.write(f't(s)\t{total_t:.2f}\nx0\t{x0}\nxf\t{xf}\ny0\t{y0}\nyf\t{yf}\nnx\t{nx}\nny\t{ny}\navg\t{best_avg:.3f}\nx_steps\t{steps_x}\ny_steps\t{steps_y}\ndelta_x\t{delta_step_x:.2f}\ndelta_y\t{delta_step_y:.2f}\nthreshold(eV)\t{threshold:.2f}\n')
     if E:
         file.write(f'Energy range: {E[0]}-{E[1]} eV\n')
     file.write(f'x_best\t{x_best[0]}\ny_best\t{y_best[0]}\n')
@@ -625,7 +629,7 @@ def intensity_correction(s, threshold=0, E=None, name='naive'):
 
 
 # complete background removal: background area selection, calculation + correction of negative values
-def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None, steps_x=40, steps_y=30, delta_step_x=None, delta_step_y=None, E=None, name_bg='interpolation', name_ic='naive', threshold=1e8):
+def background_removal(directory, s, nx=5, ny=5, x0=0, y0=0, xf=None, yf=None, steps_x=None, steps_y=None, delta_step_x=None, delta_step_y=None, E=None, name_bg='interpolation', name_ic='naive', threshold=1e8, dm4_filename=None):
     '''
     Complete background removal from EELS spectra by calculating the background and correcting negative intensity values.
     '''
@@ -636,9 +640,11 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
     logs = directory + 'logs/'
     if not os.path.exists(logs):
         os.makedirs(logs)
-
-    # print("\nStarting background removal...\n")
-    s.align_zero_loss_peak()
+    
+    if dm4_filename[2:] != 'Aligned.hspy':
+        s.align_zero_loss_peak()
+        s.save(directory+'Aligned.hspy', overwrite=True)
+       
     # print("Zero-loss peak aligned")
 
     x, y = best_avg_roi(directory, s, nx, ny, threshold=s.data.max(), E=E, x0=x0, y0=y0, xf=xf, yf=yf, steps_x=steps_x, steps_y=steps_y, delta_step_x=delta_step_x, delta_step_y=delta_step_y)
@@ -662,13 +668,13 @@ def background_removal(directory, s, nx=20, ny=20, x0=0, y0=0, xf=None, yf=None,
         s = intensity_correction(s, threshold, E, name_ic)
 
     s.save(directory+'Data.hspy', overwrite=True)
-    np.savetxt(directory+'Background.hspy', b)
+    # np.savetxt(directory+'Background.hspy', b)
     return 
 
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_components=False, plot_components=True, cmap='coolwarm'):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_components=False, plot_components=True, cmap='coolwarm', bss_components=None):
     '''
     Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
@@ -704,8 +710,29 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
         os.makedirs(directory)
 
     if method == 'NMF':
-        s.decomposition(algorithm=method, output_dimension=n_components, max_iter=500000)
-    else:
+        if bss_components is not None:
+            s.decomposition(algorithm='sklearn_pca', output_dimension=bss_components)    
+            s.blind_source_separation(bss_components, diff_order=1)
+            sb = s.get_decomposition_model(bss_components)
+            sb.save(directory+f"{bss_components}_BSS_Data.hspy", overwrite=True)
+            print('bss done')
+            if plot_components:
+                dir_bss = directory + 'BSS/'
+                if not os.path.exists(dir_bss):
+                    os.makedirs(dir_bss)
+                for i in range(bss_components):
+                    _ = s.plot_bss_loadings([i], title='', cmap=cmap, norm='log')
+                    plt.savefig(dir_bss+f"{i+1}.png",dpi=600, bbox_inches='tight')
+                    plt.close()
+                _ = s.plot_bss_factors(bss_components, title='', comp_label="")
+                plt.savefig(dir_bss+"factors.png",dpi=600, bbox_inches='tight')
+                plt.close()
+            sb.decomposition(algorithm=method, output_dimension=n_components, max_iter=n_components*10000,init='nndsvd', beta_loss='kullback-leibler')
+        else:
+            sb = s.deepcopy()            
+            sb.decomposition(algorithm=method, output_dimension=n_components, max_iter=n_components*100000,init='nndsvd', beta_loss='kullback-leibler')
+    
+    else: #pca
         outp = directory + "logs/"
         if not os.path.exists(outp):
             os.makedirs(outp)
@@ -719,7 +746,6 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
             f.write("Component\tExplainedVariance\tExplainedVarianceRatio\n")
             for i in range(N_comp):
                 f.write(f"{i+1}\t{explained_variance[i]}\t{explained_variance_ratio[i]}\n")
-        print('Summary table saved')
         
         s.plot_explained_variance_ratio(n=max_points, vline=True)
         plt.savefig(directory+"logs/explained_variance_ratio.png", dpi=300, bbox_inches="tight")
@@ -732,21 +758,27 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
         a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
 
     # save new signal with the most relevant components
-    sc = s.get_decomposition_model(a)
-    sc.save(directory+f"{a}_components.hspy", overwrite=True)
+    if bss_components is not None and method == 'NMF':
+        sc = sb.get_decomposition_model(a)
+    else:
+        sc = s.get_decomposition_model(a)
+        
+    if save_components:
+        sc.save(directory+f"{a}_Data.hspy", overwrite=True)
 
     # save each component as a separate file
     if save_components or plot_components:
-        dir_components = directory + "components/"
+        dir_components = directory + "Component_"
 
-        if not os.path.exists(dir_components):
-            os.makedirs(dir_components)
-
+        if plot_components:
+            _ = sc.plot_decomposition_factors(a, title='', comp_label="")
+            plt.savefig(dir_components+"factors.png",dpi=600, bbox_inches='tight')
+            plt.close()
         for i in range(a): 
             if save_components:
                 s.get_decomposition_model(components=[i]).save(dir_components+f"{i+1}.hspy", overwrite=True)
             if plot_components:
-                _ = sc.plot_decomposition_loadings([i],title='', cmap=cmap, norm='log')
+                _ = sc.plot_decomposition_loadings([i], title='', cmap=cmap, norm='log')
                 plt.savefig(dir_components+f"{i+1}.png",dpi=600, bbox_inches='tight')
                 plt.close()
                 _ = sc.plot_decomposition_factors([i], title='')
@@ -827,9 +859,9 @@ def get_mask(s, directory, method='otsu'):
     mask = 1 - mask  # Invert the mask to have 1 outside the nanoparticle and 0 inside
 
     # Save the binary mask as a text file with integer values (0 and 1) with the 2D image's size
-    np.savetxt(directory+method+"_mask.txt", mask, fmt="%d")
+    np.savetxt(directory+method+'.txt', mask, fmt="%d")
     histogram, bin_edges = np.histogram(img_8bit.ravel(), bins=256)
-    np.savetxt(directory+method+"_histogram.txt", np.column_stack((bin_edges[:-1], histogram)), fmt="%d")
+    np.savetxt(directory+'histogram_'+method+'.txt', np.column_stack((bin_edges[:-1], histogram)), fmt="%d")
 
     # Plot the images and the histogram
     plt.figure(figsize=(15, 5))
@@ -855,7 +887,7 @@ def get_mask(s, directory, method='otsu'):
     plt.xticks([])
     plt.yticks([])
 
-    plt.savefig(directory+method+"_results.png", dpi=300, bbox_inches='tight')
+    plt.savefig(directory+method+'_results.png', dpi=300, bbox_inches='tight')
     plt.close()
     
     # # Otsu's thresholding after Gaussian filtering (from OpenCV documentation, to reduce noise and improve the thresholding result)
@@ -888,7 +920,7 @@ def apply_mask(s, mask_file):
 
     return 
 
-def merge_masks(directory, mask_files=["otsu_mask.txt", "adaptive_mask.txt"]):
+def merge_masks(directory, mask_files=["otsu.txt", "adaptive.txt"]):
     '''
     Merges two binary masks (from Otsu's and adaptive thresholding) to create a more accurate mask of the area outside of the nanoparticle.
     Parameters:
@@ -911,7 +943,7 @@ def merge_masks(directory, mask_files=["otsu_mask.txt", "adaptive_mask.txt"]):
     mask = np.clip(mask, 0, 1)
     mask = 1 - mask  # Invert the mask to have 1 outside the nanoparticle and 0 inside
 
-    np.savetxt(directory+"merged_mask.txt", mask, fmt="%d")
+    np.savetxt(directory+"mask_merged.txt", mask, fmt="%d")
 
     plt.figure(figsize=(15, 5))
 
@@ -928,7 +960,7 @@ def merge_masks(directory, mask_files=["otsu_mask.txt", "adaptive_mask.txt"]):
     plt.xticks([])
     plt.yticks([])
 
-    plt.savefig(directory+"merged_mask_results.png", dpi=300, bbox_inches='tight')
+    plt.savefig(directory+"mask_merged_results.png", dpi=300, bbox_inches='tight')
     plt.close()
     
 
