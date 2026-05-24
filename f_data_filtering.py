@@ -6,34 +6,9 @@ import time
 import os
 import cv2 as cv
 from exspy.signals import EELSSpectrum
+import datetime
 
 
-def dm4_pre_treatment(base, b_method='interpolation'):
-    '''
-    Given a directory containing the .dm4 files, aligns the ZLP and calculates the background using the desired method
-    These files are saved in the same directory with the suffixes "Aligned.hspy" and "Back.hspy", respectively.
-    '''
-    dm4_files = [f for f in os.listdir(base) if f.endswith('.dm4')]
-    for m in range(len(dm4_files)):
-        dm4 = dm4_files[m]
-        s = hs.load(base + dm4)[-1]
-        if not os.path.exists(base + f'{m+1}-Aligned.hspy'):
-            s.align_zero_loss_peak()
-            s.save(base + f'{m+1}-Aligned.hspy', overwrite=True)
-            del s
-        if not os.path.exists(base + f'{m+1}-Back_{b_method}.hspy'):
-            s = hs.load(base + f'{m+1}-Aligned.hspy')
-            x_best, y_best = best_avg_roi(base + f'{m+1}_', s, nx=10, ny=10, threshold=s.data.max(), E=(0., 0.8))
-            b = get_background(s, x=x_best, y=y_best, name=b_method)
-            
-            b_hspy = hs.signals.Signal1D(b)
-            b_hspy.axes_manager[0].name = s.axes_manager[-1].name
-            b_hspy.axes_manager[0].units = s.axes_manager[-1].units
-            b_hspy.axes_manager[0].scale = s.axes_manager[-1].scale
-            b_hspy.axes_manager[0].offset = s.axes_manager[-1].offset
-
-            b_hspy.save(base + f'{m+1}-{b_method}_b.hspy', overwrite=True)
-    return
 
 # Background calculation for EELS spectra
 def check_roi_E(s, x, y, E=None):
@@ -204,39 +179,42 @@ def background_interpolation(s, x, y, E=None):
 
     return f(small_s.axes_manager[2].axis)
 
-def background_thesis(s, b):
+def background_thesis(s, b, rebin_factor=3, num_channels=20):
     """
-    Background removal method based on normalizing the background spectrum (thesis)
-    Parameters:
-    -----------
-    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The input (EELS) spectrum.
-    b : np.signal1d
-        The background spectrum to be removed.  
-    Returns:
-    --------
-    hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The background-subtracted EELS spectrum.
-
+    Método de eliminación de fondo basado en la normalización 
+    del espectro de fondo según la tesis.
     """
     s_ext = s.deepcopy()
-    del s
-    # divide each of the reduced spectra by the background, channel by channel, search minimum
+    
+    # as arrays for faster execution
+    S_original = np.asarray(s_ext.data)
+    B_original = np.asarray(b.data) if hasattr(b, 'data') else np.asarray(b)
+    
+    def rebin_1d(arr, factor): # for b
+        shape = arr.shape[0] // factor, factor
+        return arr[:shape[0] * factor].reshape(shape).mean(-1)
+    
+    def rebin_3d(arr, factor): # for s
+        Ny, Nx, Nc = arr.shape
+        Nc_new = Nc // factor
+        return arr[:, :, :Nc_new * factor].reshape(Ny, Nx, Nc_new, factor).mean(-1)
 
-    C = s_ext.data/b.data
-    #print(C_ij.shape)
-
-    # global minimum point and corresponding intensity values
-    # I_min = np.min(C_ij)
-    E_min_idx = np.argmin(C, axis=2)
-    S_min = np.take_along_axis(s_ext.data, E_min_idx[..., np.newaxis], axis=2)
-    IB_min = b.data[E_min_idx][..., np.newaxis]
-
-    # normalise the background with respect to each one of the spectra
-    # subtract the normalised background from each of the spectra
-    s_ext -= b*S_min/IB_min
-    print(s_ext.data.shape)
-
+    
+    S_red = rebin_3d(S_original, rebin_factor)[:, :, :num_channels]
+    B_red = rebin_1d(B_original, rebin_factor)[:num_channels]
+    
+    for i in range(S_original.shape[0]): # x
+        for j in range(S_original.shape[1]): # y 
+            
+            C_ij = S_red[i, j, :] / B_red[:]
+            
+            idx = np.argmin(C_ij) # index for Emin
+            S_min_ij = S_red[i, j, idx]
+            IBmin = B_red[idx]
+ 
+            B_norm = (S_min_ij/IBmin)*B_original
+            
+            s_ext.data[i, j, :] = S_original[i, j, :] - B_norm
 
     return s_ext
 
@@ -629,26 +607,21 @@ def intensity_correction(s, threshold=0, E=None, name='naive'):
 
 
 # complete background removal: background area selection, calculation + correction of negative values
-def background_removal(directory, s, nx=5, ny=5, x0=0, y0=0, xf=None, yf=None, steps_x=None, steps_y=None, delta_step_x=None, delta_step_y=None, E=None, name_bg='interpolation', name_ic='naive', threshold=1e8, dm4_filename=None):
+def background_removal(directory, s, nx=15, ny=15, x0=0, y0=0, xf=None, yf=None, steps_x=None, steps_y=None, delta_step_x=None, delta_step_y=None, E=None, name_bg='interpolation', name_ic='naive', threshold=1e8, dm4_filename=None):
     '''
     Complete background removal from EELS spectra by calculating the background and correcting negative intensity values.
     '''
-    
+    s.isig[0.0:]
     # Create output directory
     if not os.path.exists(directory):
         os.makedirs(directory)
     logs = directory + 'logs/'
     if not os.path.exists(logs):
         os.makedirs(logs)
-    
-    if dm4_filename[2:] != 'Aligned.hspy':
-        s.align_zero_loss_peak()
-        s.save(directory+'Aligned.hspy', overwrite=True)
-       
-    # print("Zero-loss peak aligned")
+
 
     x, y = best_avg_roi(directory, s, nx, ny, threshold=s.data.max(), E=E, x0=x0, y0=y0, xf=xf, yf=yf, steps_x=steps_x, steps_y=steps_y, delta_step_x=delta_step_x, delta_step_y=delta_step_y)
-    # print(f"Best ROI found at x: {x} y: {y}")
+    print(f"Best ROI found at x: {x} y: {y}")
 
     if name_bg not in ['constant', 'interpolation', 'thesis']:
         print("\nIn background_removal: unknown method name for background subtraction, using 'interpolation' instead\n")
@@ -661,20 +634,21 @@ def background_removal(directory, s, nx=5, ny=5, x0=0, y0=0, xf=None, yf=None, s
         b = get_background(s, x, y, name=name_bg)
         s = s - b
 
-        if name_ic not in ['naive', 'threshold', 'averaged', 'zero']:
-            print("\nIn background_removal: unknown method name for intensity correction, using 'naive' instead\n")
-            name_ic = 'naive'
-    
-        s = intensity_correction(s, threshold, E, name_ic)
+    if name_ic not in ['naive', 'threshold', 'averaged', 'zero']:
+        print("\nIn background_removal: unknown method name for intensity correction, using 'naive' instead\n")
+        name_ic = 'naive'
+
+    s = intensity_correction(s, threshold, E, name_ic)
 
     s.save(directory+'Data.hspy', overwrite=True)
+    print("Background removed and intensity corrected, data saved")
     # np.savetxt(directory+'Background.hspy', b)
     return 
 
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_components=False, plot_components=True, cmap='coolwarm', bss_components=None):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_components=False, plot_components=True, cmap='coolwarm'):
     '''
     Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
@@ -709,28 +683,8 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    if method == 'NMF':
-        if bss_components is not None:
-            s.decomposition(algorithm='sklearn_pca', output_dimension=bss_components)    
-            s.blind_source_separation(bss_components, diff_order=1)
-            sb = s.get_decomposition_model(bss_components)
-            sb.save(directory+f"{bss_components}_BSS_Data.hspy", overwrite=True)
-            print('bss done')
-            if plot_components:
-                dir_bss = directory + 'BSS/'
-                if not os.path.exists(dir_bss):
-                    os.makedirs(dir_bss)
-                for i in range(bss_components):
-                    _ = s.plot_bss_loadings([i], title='', cmap=cmap, norm='log')
-                    plt.savefig(dir_bss+f"{i+1}.png",dpi=600, bbox_inches='tight')
-                    plt.close()
-                _ = s.plot_bss_factors(bss_components, title='', comp_label="")
-                plt.savefig(dir_bss+"factors.png",dpi=600, bbox_inches='tight')
-                plt.close()
-            sb.decomposition(algorithm=method, output_dimension=n_components, max_iter=n_components*10000,init='nndsvd', beta_loss='kullback-leibler')
-        else:
-            sb = s.deepcopy()            
-            sb.decomposition(algorithm=method, output_dimension=n_components, max_iter=n_components*100000,init='nndsvd', beta_loss='kullback-leibler')
+    if method == 'NMF':     
+        s.decomposition(algorithm=method, output_dimension=n_components, max_iter=n_components*100000,init='nndsvd')
     
     else: #pca
         outp = directory + "logs/"
@@ -758,10 +712,7 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
         a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
 
     # save new signal with the most relevant components
-    if bss_components is not None and method == 'NMF':
-        sc = sb.get_decomposition_model(a)
-    else:
-        sc = s.get_decomposition_model(a)
+    sc = s.get_decomposition_model(a)
         
     if save_components:
         sc.save(directory+f"{a}_Data.hspy", overwrite=True)
@@ -1046,3 +997,77 @@ def dielectric_function(s, zlp, directory, dir_mask):
 
 
 
+
+
+
+# full data filtering process: ZLP alignment, background removal, intensity correction, mask application and dimensionality reduction
+
+def dm4_pre_treatment(base, dm4, background):
+    '''
+    Given a directory containing the .dm4 files, aligns the ZLP and substracts the background using the desired method
+    in the same directory with the suffixes "Aligned.hspy" and creates a background folder, respectively.
+    '''
+    file_idx = int(dm4[0])
+    s = hs.load(base + dm4)[-1]
+
+    back_folder = base + f'{file_idx}_' + background['name_bg'] + '_' + background['name_ic'] + '_BR/'
+
+    if not os.path.exists(base + f'{file_idx}-Aligned.hspy'):
+        s.align_zero_loss_peak()
+        s.save(base + f'{file_idx}-Aligned.hspy', overwrite=True)
+        del s
+    print("Zero-loss peak aligned")
+
+    s = hs.load(base + f'{file_idx}-Aligned.hspy')
+    background_removal(back_folder, s, name_bg=background['name_bg'], name_ic=background['name_ic'])
+
+    print("Background removed and intensity corrected, data saved")
+           
+    return
+
+def mask_process(base, dm4, mask):
+    if not mask["done"]:
+        data_scan = hs.load(os.path.join(base, dm4))[1]
+
+        file_idx = int(dm4[0])
+        dir_mask = base + f'{file_idx}-mask/' #masks folder, as they dont depend on the background method
+
+        if not os.path.exists(dir_mask):
+            os.makedirs(dir_mask)
+
+        if mask["merge"]:
+            get_mask(data_scan, dir_mask, method='otsu')
+            get_mask(data_scan, dir_mask, method='adaptive')
+            merge_masks(dir_mask)
+        else:
+            get_mask(data_scan, dir_mask, method=mask["method"])
+        del data_scan
+    return
+
+def dimensionality_reduction(base, dim_reduction, E_slice=None):
+    s = hs.load(base+"Data.hspy")
+    if E_slice is not None:
+        s = s.isig[E_slice[0]:E_slice[1]]
+    components_reduction(base + dim_reduction['folder_name'], s, method=dim_reduction['method'], n_components=dim_reduction['n_components'],  plot_components=dim_reduction['plot_components'], save_components=dim_reduction['save_components'])
+    return
+
+def data_treatment(base, dm4, background, mask, dim_reduction, E_slice=None):
+    file_idx = int(dm4[0])
+    dm4_pre_treatment(base, dm4, background)
+    mask_process(base, dm4, mask)
+    dimensionality_reduction(base + f'{file_idx}_' + background['name_bg'] + '_' + background['name_ic'] + '_BR/', dim_reduction, E_slice=E_slice)
+    return
+
+def full_data_treatment(data_path_base, background, mask, dim_reduction, E_slice = None):
+   
+    # get dm4 files in the directory data
+    dm4_files = [f for f in os.listdir(data_path_base) if f.endswith('.dm4')]
+    
+    for dm4 in dm4_files:
+        print(f'Processing {dm4}...')
+        # align zlp, background, mask and dimensionality reduction
+        data_treatment(data_path_base, dm4, background, mask, dim_reduction, E_slice=E_slice)
+
+        print(f'Finished processing {dm4} at {datetime.datetime.now()}.\n')
+    print(f'Finished processing all files in {data_path_base} at {datetime.datetime.now()}.\n')
+    return
