@@ -7,6 +7,7 @@ import os
 import cv2 as cv
 from exspy.signals import EELSSpectrum
 import datetime
+import f_dielectric as df
 
 
 
@@ -648,7 +649,7 @@ def background_removal(directory, s, nx=15, ny=15, x0=0, y0=0, xf=None, yf=None,
 
 
 # PCA, NNMF: rebuilding the spectra with the most relevant components to further reduce noise and enhance signal
-def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_components=False, plot_components=True, cmap='coolwarm'):
+def components_reduction(directory, s, method='sklearn_pca', n_components=None,  max_points=40, save_components=False, add = 0, plot_components=True, cmap='coolwarm'):
     '''
     Reduces the number of components in the EELS spectra using PCA or NNMF, by rebuilding the spectra with the most relevant components.
 
@@ -709,7 +710,7 @@ def components_reduction(directory, s, method='sklearn_pca', n_components=None, 
     if n_components is not None:
         a = n_components
     else:
-        a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points)
+        a = s.estimate_elbow_position(explained_variance_ratio=None, log=True, max_points=max_points) + add
 
     # save new signal with the most relevant components
     sc = s.get_decomposition_model(a)
@@ -776,224 +777,6 @@ def components_rebuild_file(comp_file, file_line, data_dir, output_name='rebuilt
 
 
 
-# binary mask to select the area outside of the nanoparticle
-def get_mask(s, directory, method='otsu'):
-    '''
-    Creates a binary mask using the specified method to select the area outside of the nanoparticle in the EELS spectrum.
-    Parameters:
-    -----------
-    s : scan
-    directory : str
-        The directory where the results will be saved.
-    method : str
-        The method to use for creating the binary mask ('otsu' or 'adaptive').
-    Returns:
-    --------
-    None
-    '''
-
-    # Normalize the image to the range [0, 255] and convert to uint8 (8-bit unsigned integer to be compatible with OpenCV functions)
-    image = s.data
-    image_norm = 255 * (image - np.min(image)) / (np.max(image) - np.min(image))
-    img_8bit = image_norm.astype(np.uint8)
-
-    # Otsu's thresholding to get a binary mask (values of 0 inside and 1 outside)
-    if method not in ['otsu', 'adaptive']:
-        print("\nIn get_mask: unknown method name, using 'otsu' instead\n")
-        method = 'otsu'
-
-    if method == 'otsu':
-        _, mask = cv.threshold(img_8bit, 0, 1, cv.THRESH_BINARY+cv.THRESH_OTSU)
-
-    elif method == 'adaptive':
-        mask = cv.adaptiveThreshold(img_8bit, 1, adaptiveMethod=cv.ADAPTIVE_THRESH_GAUSSIAN_C, thresholdType=cv.THRESH_BINARY, blockSize=99, C=-3)
-    mask = 1 - mask  # Invert the mask to have 1 outside the nanoparticle and 0 inside
-
-    # Save the binary mask as a text file with integer values (0 and 1) with the 2D image's size
-    np.savetxt(directory+method+'.txt', mask, fmt="%d")
-    histogram, bin_edges = np.histogram(img_8bit.ravel(), bins=256)
-    np.savetxt(directory+'histogram_'+method+'.txt', np.column_stack((bin_edges[:-1], histogram)), fmt="%d")
-
-    # Plot the images and the histogram
-    plt.figure(figsize=(15, 5))
-
-    # original image
-    plt.subplot(1, 3, 1)
-    plt.imshow(img_8bit, cmap='gray', aspect='equal')
-    plt.title('Original Image')
-    plt.xticks([])
-    plt.yticks([])
-
-    # histogram
-    plt.subplot(1, 3, 2)
-    plt.hist(img_8bit.ravel(), bins=256, color='blue')
-    plt.title('Histogram')
-    plt.xlabel('Intensity')
-    plt.ylabel('Pixel count')
-
-    # masked image
-    plt.subplot(1, 3, 3)
-    plt.imshow(mask, cmap='gray', aspect='equal')
-    plt.title(f"{method.capitalize()}'s Thresholding")
-    plt.xticks([])
-    plt.yticks([])
-
-    plt.savefig(directory+method+'_results.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # # Otsu's thresholding after Gaussian filtering (from OpenCV documentation, to reduce noise and improve the thresholding result)
-    # blur = cv.GaussianBlur(img,(5,5),0)
-    # ret3,th3 = cv.threshold(blur,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU)
-    # mask3 = cv.inRange(th3)
-
-    return 
-
-def apply_mask(s, mask_file):
-    '''
-    Applies a binary mask to the original EELS spectrum to select the area outside of the nanoparticle.
-    Parameters:
-    -----------
-    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The input (EELS) spectrum.
-    mask_file : str
-        The name of the text file containing the binary mask
-    Returns:
-    --------
-    None
-    '''
-
-    # Load the binary mask from the text file
-    mask = np.loadtxt(mask_file, dtype=int)
-
-    # Apply the mask to the original 3D EELS spectrum (set values inside the nanoparticle to zero)
-    for k in range(s.data.shape[2]):  # iterate over energy channels
-        s.data[:,:,k] *=(1-mask)  # set values inside the nanoparticle to zero 
-
-    return 
-
-def merge_masks(directory, mask_files=["otsu.txt", "adaptive.txt"]):
-    '''
-    Merges two binary masks (from Otsu's and adaptive thresholding) to create a more accurate mask of the area outside of the nanoparticle.
-    Parameters:
-    -----------
-    directory : str
-        The directory where the results will be saved.
-    mask_files : list of str
-        The names of the text files containing the binary masks to be merged, in the same directory (default is ["otsu_mask.txt", "adaptive_mask.txt"]).
-    Returns:
-    --------
-    None
-    '''
-
-    if not os.path.exists(directory+mask_files[0]) or not os.path.exists(directory+mask_files[1]):
-        raise FileNotFoundError("\nIn merge_masks: one or both mask files not found in the directory\n")
-    
-    otsu = np.loadtxt(directory+mask_files[0], dtype=int)
-    adaptive = np.loadtxt(directory+mask_files[1], dtype=int)
-    mask = (1-otsu) + (1-adaptive)
-    mask = np.clip(mask, 0, 1)
-    mask = 1 - mask  # Invert the mask to have 1 outside the nanoparticle and 0 inside
-
-    np.savetxt(directory+"mask_merged.txt", mask, fmt="%d")
-
-    plt.figure(figsize=(15, 5))
-
-    plt.subplot(1, 3, 1)
-    plt.imshow(otsu, cmap='gray', aspect='equal')
-    plt.title("Otsu's Thresholding Mask")
-    plt.subplot(1, 3, 2)
-    plt.imshow(adaptive, cmap='gray', aspect='equal')
-    plt.title("Adaptive Thresholding Mask")
-    # masked image
-    plt.subplot(1, 3, 3)
-    plt.imshow(mask, cmap='gray', aspect='equal')
-    plt.title(f"Merged mask")
-    plt.xticks([])
-    plt.yticks([])
-
-    plt.savefig(directory+"mask_merged_results.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    
-
-
-
-# calculation of the dielectric function from the EELS spectrum using Kramers-Kronig analysis
-def dielectric_function(s, zlp, directory, dir_mask):
-    '''
-    Calculates the dielectric function from the EELS spectrum using Kramers-Kronig analysis.
-
-    Parameters:
-    -----------
-    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The input (EELS) spectrum.
-    directory : str
-        The directory where the results will be saved.
-    dir_mask : str
-        The directory where the binary mask is saved.
-    dir_zlp : str
-        The directory where the ZLP spectrum is saved.
-    Returns:
-    --------
-    None
-    '''
-
-    print(zlp)
-    print(s)
-    thickness = hs.load(directory+'Relative thickness.dm4').data
-    print(thickness.shape)
-    t = s.isig[0].copy() 
-    
-    # 3. Inyectar los datos del espesor en ese clon
-    # Al ser s.isig[0], ya tiene dimensiones (422, 321) y los ejes perfectos
-    t.data = thickness
-    
-    # Limpieza de seguridad
-    t.data[t.data <= 0] = 1e-9
-    
-    # Cambiar el nombre para que no se confunda con EELS
-    t.metadata.General.title = "Thickness Map"
-
-    apply_mask(s, dir_mask)
-
-    diel = s.kramers_kronig_analysis(zlp=zlp, iterations=2, n=None, t=t, delta=0.5, full_output=False)
-    diel.save(directory+"dielectric_function.hspy", overwrite=True)
-    diel.plot()
-    plt.show()
-    
-    diel.real.plot()
-    plt.show()
-    diel.imag.plot()
-    plt.show()
-    
-    
-    # # threshold of the zlp to estimate the thickness of the sample
-    # thr = s.estimate_elastic_scattering_threshold()
-    # if np.any(np.isnan(thr.data)): # fixing issues NaN
-    #     thr.data = np.nan_to_num(thr.data, nan=np.nanmedian(thr.data))
-
-    # # thickness calculation
-    # thickness = s.estimate_thickness(threshold=thr)
-
-    # # zlp calculation in the area used for background removal
-    # for f in os.listdir(directory):
-    #     if f.endswith("best_avg_roi.txt"):
-    #         aux = np.loadtxt(directory+f, skiprows=1)
-    #         x = (aux[0], aux[1])
-    #         y = (aux[2], aux[3])
-    #         break
-    # small_s = get_roi_E(s, x, y)
-    # zlp = small_s.mean(axis=(0,1))
-    # zlp = EELSSpectrum(zlp.data, axes=[s.axes_manager.signal_axes[0].copy()])
-    # I =np.trapezoid(zlp.data)
-    # del small_s, zlp
-    # print(I)
-
-    # apply_mask(s, dir_mask)
-    # diel = s.kramers_kronig_analysis(zlp=I, iterations=2, n=None, t=thickness, delta=0.5, full_output=False)
-    # diel.save(directory+"dielectric_function.hspy")
-    # diel.plot()
-    # plt.show()
-    return
 
 
 
@@ -1019,7 +802,8 @@ def dm4_pre_treatment(base, dm4, background):
     print("Zero-loss peak aligned")
 
     s = hs.load(base + f'{file_idx}-Aligned.hspy')
-    background_removal(back_folder, s, name_bg=background['name_bg'], name_ic=background['name_ic'])
+    if background["done"] == False:
+        background_removal(back_folder, s, name_bg=background['name_bg'], name_ic=background['name_ic'])
 
     print("Background removed and intensity corrected, data saved")
            
@@ -1036,29 +820,29 @@ def mask_process(base, dm4, mask):
             os.makedirs(dir_mask)
 
         if mask["merge"]:
-            get_mask(data_scan, dir_mask, method='otsu')
-            get_mask(data_scan, dir_mask, method='adaptive')
-            merge_masks(dir_mask)
+            df.get_mask(data_scan, dir_mask, method='otsu')
+            df.get_mask(data_scan, dir_mask, method='adaptive')
+            df.merge_masks(dir_mask)
         else:
-            get_mask(data_scan, dir_mask, method=mask["method"])
+            df.get_mask(data_scan, dir_mask, method=mask["method"])
         del data_scan
     return
 
-def dimensionality_reduction(base, dim_reduction, E_slice=None):
+def dimensionality_reduction(base, dim_reduction, E_slice=None, add = 0):
     s = hs.load(base+"Data.hspy")
     if E_slice is not None:
         s = s.isig[E_slice[0]:E_slice[1]]
-    components_reduction(base + dim_reduction['folder_name'], s, method=dim_reduction['method'], n_components=dim_reduction['n_components'],  plot_components=dim_reduction['plot_components'], save_components=dim_reduction['save_components'])
+    components_reduction(base + dim_reduction['folder_name'], s, method=dim_reduction['method'], n_components=dim_reduction['n_components'],  plot_components=dim_reduction['plot_components'], save_components=dim_reduction['save_components'], add=add)
     return
 
-def data_treatment(base, dm4, background, mask, dim_reduction, E_slice=None):
+def data_treatment(base, dm4, background, mask, dim_reduction, E_slice=None, add = 0):
     file_idx = int(dm4[0])
     dm4_pre_treatment(base, dm4, background)
     mask_process(base, dm4, mask)
-    dimensionality_reduction(base + f'{file_idx}_' + background['name_bg'] + '_' + background['name_ic'] + '_BR/', dim_reduction, E_slice=E_slice)
+    dimensionality_reduction(base + f'{file_idx}_' + background['name_bg'] + '_' + background['name_ic'] + '_BR/', dim_reduction, E_slice=E_slice, add = add)
     return
 
-def full_data_treatment(data_path_base, background, mask, dim_reduction, E_slice = None):
+def full_data_treatment(data_path_base, background, mask, dim_reduction, E_slice = None, add = 0):
    
     # get dm4 files in the directory data
     dm4_files = [f for f in os.listdir(data_path_base) if f.endswith('.dm4')]
@@ -1066,7 +850,7 @@ def full_data_treatment(data_path_base, background, mask, dim_reduction, E_slice
     for dm4 in dm4_files:
         print(f'Processing {dm4}...')
         # align zlp, background, mask and dimensionality reduction
-        data_treatment(data_path_base, dm4, background, mask, dim_reduction, E_slice=E_slice)
+        data_treatment(data_path_base, dm4, background, mask, dim_reduction, E_slice=E_slice, add = add)
 
         print(f'Finished processing {dm4} at {datetime.datetime.now()}.\n')
     print(f'Finished processing all files in {data_path_base} at {datetime.datetime.now()}.\n')
