@@ -8,6 +8,53 @@ import cv2 as cv
 from exspy.signals import EELSSpectrum
 import datetime
 import f_data_filtering as f
+from hyperspy.axes import AxesManager
+
+
+def match_axis(s, zlp, E_lims = None):
+    '''
+    ADVICED TO CROP ENERGY BEFOREHAND TO AVOID MEMORY PROBLEMS. 
+    better to just modify zlp, as it is usually smaller than the SI
+    '''
+    s_crop = s.deepcopy()
+    zlp_crop = zlp.deepcopy()
+    
+    # most restrictive energy range (overlap) between SI and ZLP
+    if E_lims is not None:
+        s_crop = s_crop.isig[E_lims[0]:E_lims[1]]
+        zlp_crop = zlp_crop.isig[E_lims[0]:E_lims[1]]
+        high = E_lims[1]
+        low = E_lims[0]
+
+    else:
+        s_axis = s.axes_manager[-1].axis
+        zlp_axis = zlp.axes_manager[-1].axis
+        low = max(s_axis.min(), zlp_axis.min())
+        high = min(s_axis.max(), zlp_axis.max())
+        s_crop = s_crop.isig[low:high]
+        zlp_crop = zlp_crop.isig[low:high]
+    # print("After cropping:")
+    # print("SI range:", s_crop.axes_manager[-1].axis.min(), "to", s_crop.axes_manager[-1].axis.max())
+    # print("ZLP range:", zlp_crop.axes_manager[-1].axis.min(), "to", zlp_crop.axes_manager[-1].axis.max())
+    # print("SI shape:", s_crop)
+    # print("ZLP shape:", zlp_crop)
+
+    # print("Energy scale used for interpolation:", e_scale)
+    good_axis = s_crop.axes_manager.signal_axes[0]
+    zlp_crop= zlp_crop.interpolate_on_axis(
+    good_axis,
+    axis=-1
+    )
+
+    # print("After rebinning:")
+    # print("SI range:", s_crop.axes_manager[-1].axis.min(), "to", s_crop.axes_manager[-1].axis.max())
+    # print("ZLP range:", zlp_crop.axes_manager[-1].axis.min(), "to", zlp_crop.axes_manager[-1].axis.max())
+    # print("SI shape:", s_crop)  
+    # print("ZLP shape:", zlp_crop)
+
+    return s_crop, zlp_crop
+
+
 
 # binary mask to select the area outside of the nanoparticle
 def get_mask(s, directory, method='otsu'):
@@ -94,15 +141,17 @@ def apply_mask(s, mask_file):
     --------
     None
     '''
-
+    s_copy = s.deepcopy()  # create a copy of the original spectrum to avoid modifying it directly
     # Load the binary mask from the text file
     mask = np.loadtxt(mask_file, dtype=int)
-
-    # Apply the mask to the original 3D EELS spectrum (set values inside the nanoparticle to zero)
-    for k in range(s.data.shape[2]):  # iterate over energy channels
-        s.data[:,:,k] *=(1-mask)  # set values inside the nanoparticle to zero 
-
-    return 
+    if len(s_copy.data.shape) == 2:
+        s_copy.data = s_copy.data * (mask)  # Apply the mask to the spectrum data (element-wise multiplication)
+    else:
+        for k in range(s_copy.data.shape[-1]):
+            s_copy.data[...,k] = s_copy.data[...,k] * (mask)  # Apply the mask to each spectrum in the stack
+    # s_copy.plot()
+    # plt.show()
+    return s_copy
 
 def merge_masks(directory, mask_files=["otsu.txt", "adaptive.txt"]):
     '''
@@ -149,78 +198,43 @@ def merge_masks(directory, mask_files=["otsu.txt", "adaptive.txt"]):
 
 
 # calculation of the dielectric function from the EELS spectrum using Kramers-Kronig analysis
-def dielectric_function(s, zlp, dir_mask):
-    '''
-    Calculates the dielectric function from the EELS spectrum using Kramers-Kronig analysis.
+def dielectric_function(s, zlp, dir_mask, thickness, dir_output):
 
-    Parameters:
-    -----------
-    s : hs.signals.EELSSpectrum or hs.signals.Signal1D
-        The input (EELS) spectrum.
-    directory : str
-        The directory where the results will be saved.
-    dir_mask : str
-        The directory where the binary mask is saved.
-    dir_zlp : str
-        The directory where the ZLP spectrum is saved.
-    Returns:
-    --------
-    None
-    '''
-    thickness = hs.load('Relative thickness.dm4').data
-    t = s.isig[0].copy() 
+    s_crop, zlp_new = match_axis(s, zlp)
     
-    # 3. Inyectar los datos del espesor en ese clon
-    # Al ser s.isig[0], ya tiene dimensiones (422, 321) y los ejes perfectos
-    t.data = thickness
+    zlp_int = zlp_new.integrate1D(axis=0)
+    s_crop_masked = apply_mask(s_crop, dir_mask)
+    thickness_masked = apply_mask(thickness, dir_mask)
+    t = np.mean(thickness_masked.data[thickness_masked.data > 0])  # calculate the mean thickness from the masked thickness map, excluding zero values
     
-    # Limpieza de seguridad
-    t.data[t.data <= 0] = 1e-9
-    
-    # Cambiar el nombre para que no se confunda con EELS
-    t.metadata.General.title = "Thickness Map"
 
-    apply_mask(s, dir_mask)
-
-    diel = s.kramers_kronig_analysis(zlp=zlp, iterations=2, n=None, t=t, delta=0.5, full_output=False)
-    diel.save("dielectric_function.hspy", overwrite=True)
+    diel = s_crop_masked.kramers_kronig_analysis(zlp=zlp_int.data[0], iterations=1, n=None, t=t, delta=0.5, full_output=False)
+    diel.save(f"{dir_output}dielectric_function.hspy", overwrite=True)
     diel.plot()
-    plt.show()
-    
-    diel.real.plot()
-    plt.show()
-    diel.imag.plot()
     plt.show()
     
     return
 
 
 
-def match_axis(s, zlp):
-    s_axis = s.axes_manager[-1].axis
-    zlp_axis = zlp.axes_manager[-1].axis
 
-    low = max(s_axis.min(), zlp_axis.min())
-    high = min(s_axis.max(), zlp_axis.max())
+if __name__ == "__main__":
+    zlp = hs.load("ZLP_9e-5s_1000frames.dm4")
+    s = hs.load("stem.dm4")[-1]
+    
+    
 
-    # recortar SI (solo energía, NO navegación)
-    s_crop = s.isig[low:high]
+# t = s.isig[0].copy() 
 
-    # interpolar ZLP al SI recortado
-    zlp_aligned = zlp.interpolate_on_axis(s_crop.axes_manager[-1])
-    nav_shape = s_crop.axes_manager.navigation_shape
-    zlp_broadcast = np.tile(zlp_aligned, (nav_shape[0], nav_shape[1], 1))
+# # 3. Inyectar los datos del espesor en ese clon
+# # Al ser s.isig[0], ya tiene dimensiones (422, 321) y los ejes perfectos
+# t.data = thickness
 
-    zlp_fixed = s_crop.deepcopy()
-    zlp_fixed.data = zlp_broadcast
+# # Limpieza de seguridad
+# t.data[t.data <= 0] = 1e-9
 
-    return s_crop, zlp_fixed
-
-zlp = hs.load("ZLP_9e-5s.dm4")
-
-
-s = hs.load("Aligned.hspy")
-s_crop, zlp_aligned = match_axis(s, zlp)
-dielectric_function(s_crop, zlp_aligned, '4-mask/otsu.txt')
+# # Cambiar el nombre para que no se confunda con EELS
+# t.metadata.General.title = "Thickness Map"
+# dielectric_function(s_crop, zlp_aligned, '4-mask/otsu.txt', thickness)
 
 
